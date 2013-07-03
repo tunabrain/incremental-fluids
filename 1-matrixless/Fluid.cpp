@@ -2,7 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 
-#include "../lodepng.h"
+#include "../lodepng/lodepng.h"
 
 using namespace std;
 

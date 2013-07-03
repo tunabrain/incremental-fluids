@@ -54,11 +54,11 @@ Both Euler and linear interpolation are not very good, since they quickly cause 
 ### References and recommended reading:
 
   1. Robert Bridson - Fluid Simulation for Computer Graphics
-     Pages 3 - 50
+       - Pages 3 - 50
   2. David Cline et al. - Fluid Flow for the Rest of Us
-     http://people.sc.fsu.edu/~jburkardt/pdf/fluid_flow_for_the_rest_of_us.pdf
+       - http://people.sc.fsu.edu/~jburkardt/pdf/fluid_flow_for_the_rest_of_us.pdf
   3. Jos Stam - Real-Time Fluid Dynamics for Games
-     http://www.dgp.toronto.edu/people/stam/reality/Research/pdf/GDC03.pdf
+       - http://www.dgp.toronto.edu/people/stam/reality/Research/pdf/GDC03.pdf
   4. Mark J. Harris - Fast Fluid Dynamics Simulation on the GPU
-     http://http.developer.nvidia.com/GPUGems/gpugems_ch38.html
+       - http://http.developer.nvidia.com/GPUGems/gpugems_ch38.html
   5. http://en.wikipedia.org/wiki/Gauss-Seidel
