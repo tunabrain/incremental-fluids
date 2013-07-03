@@ -1,3 +1,5 @@
+![Fluid](https://raw.github.com/tunabrain/incremental-fluids/master/Header.png)
+
 Incremental fluids
 ==================
 
