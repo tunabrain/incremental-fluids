@@ -29,48 +29,59 @@ freely, subject to the following restrictions:
 
 using namespace std;
 
-/* This is the class representing fluid quantities such as density and velocity
- * on the MAC grid. It saves attributes such as offset from the top left grid
- * cell, grid width and height as well as cell size.
- * 
- * It also contains two memory buffers: A source (_src) buffer and a
- * destination (_dst) buffer.
- * Most operations on fluid quantities can be done in-place; that is, they
- * write to the same buffer they're reading from (which is always _src).
- * However, some operations, such as advection, cannot be done in-place.
- * Instead, they will write to the _dst buffer. Once the operation is
- * completed, flip() can be called to swap the source and destination buffers,
- * such that the result of the operation is visible to subsequent operations.
- */
 class FluidQuantity {
-    /* Memory buffers for fluid quantity */
     double *_src;
     double *_dst;
 
-    /* Width and height */
     int _w;
     int _h;
-    /* X and Y offset from top left grid cell.
-     * This is (0.5,0.5) for centered quantities such as density,
-     * and (0.0, 0.5) or (0.5, 0.0) for jittered quantities like the velocity.
-     */
     double _ox;
     double _oy;
-    /* Grid cell size */
     double _hx;
     
-    /* Linear intERPolate between a and b for x ranging from 0 to 1 */
     double lerp(double a, double b, double x) const {
         return a*(1.0 - x) + b*x;
     }
     
-    /* Simple forward Euler method for velocity integration in time */
-    void euler(double &x, double &y, double timestep, const FluidQuantity &u, const FluidQuantity &v) const {
-        double uVel = u.lerp(x, y)/_hx;
-        double vVel = v.lerp(x, y)/_hx;
+    /* Cubic intERPolate using samples a through d for x ranging from 0 to 1.
+     * A Catmull-Rom spline is used. Over- and undershoots are clamped to
+     * prevent blow-up.
+     */
+    double cerp(double a, double b, double c, double d, double x) const {
+        double xsq = x*x;
+        double xcu = xsq*x;
         
-        x -= uVel*timestep;
-        y -= vVel*timestep;
+        double minV = min(a, min(b, min(c, d)));
+        double maxV = max(a, max(b, max(c, d)));
+
+        double t =
+            a*(0.0 - 0.5*x + 1.0*xsq - 0.5*xcu) +
+            b*(1.0 + 0.0*x - 2.5*xsq + 1.5*xcu) +
+            c*(0.0 + 0.5*x + 2.0*xsq - 1.5*xcu) +
+            d*(0.0 + 0.0*x - 0.5*xsq + 0.5*xcu);
+        
+        return min(max(t, minV), maxV);
+    }
+    
+    /* Third order Runge-Kutta for velocity integration in time */
+    void rungeKutta3(double &x, double &y, double timestep, const FluidQuantity &u, const FluidQuantity &v) const {
+        double firstU = u.lerp(x, y)/_hx;
+        double firstV = v.lerp(x, y)/_hx;
+
+        double midX = x - 0.5*timestep*firstU;
+        double midY = y - 0.5*timestep*firstV;
+
+        double midU = u.lerp(midX, midY)/_hx;
+        double midV = v.lerp(midX, midY)/_hx;
+
+        double lastX = x - 0.75*timestep*midU;
+        double lastY = y - 0.75*timestep*midV;
+
+        double lastU = u.lerp(lastX, lastY);
+        double lastV = v.lerp(lastX, lastY);
+        
+        x -= timestep*((2.0/9.0)*firstU + (3.0/9.0)*midU + (4.0/9.0)*lastU);
+        y -= timestep*((2.0/9.0)*firstV + (3.0/9.0)*midV + (4.0/9.0)*lastV);
     }
     
 public:
@@ -95,7 +106,6 @@ public:
         return _src;
     }
     
-    /* Read-only and read-write access to grid cells */
     double at(int x, int y) const {
         return _src[x + y*_w];
     }
@@ -104,9 +114,6 @@ public:
         return _src[x + y*_w];
     }
     
-    /* Linear intERPolate on grid at coordinates (x, y).
-     * Coordinates will be clamped to lie in simulation domain
-     */
     double lerp(double x, double y) const {
         x = min(max(x - _ox, 0.0), _w - 1.001);
         y = min(max(y - _oy, 0.0), _h - 1.001);
@@ -121,6 +128,28 @@ public:
         return lerp(lerp(x00, x10, x), lerp(x01, x11, x), y);
     }
     
+    /* Cubic intERPolate on grid at coordinates (x, y).
+     * Coordinates will be clamped to lie in simulation domain
+     */
+    double cerp(double x, double y) const {
+        x = min(max(x - _ox, 0.0), _w - 1.001);
+        y = min(max(y - _oy, 0.0), _h - 1.001);
+        int ix = (int)x;
+        int iy = (int)y;
+        x -= ix;
+        y -= iy;
+        
+        int x0 = max(ix - 1, 0), x1 = ix, x2 = ix + 1, x3 = min(ix + 2, _w - 1);
+        int y0 = max(iy - 1, 0), y1 = iy, y2 = iy + 1, y3 = min(iy + 2, _h - 1);
+        
+        double q0 = cerp(at(x0, y0), at(x1, y0), at(x2, y0), at(x3, y0), x);
+        double q1 = cerp(at(x0, y1), at(x1, y1), at(x2, y1), at(x3, y1), x);
+        double q2 = cerp(at(x0, y2), at(x1, y2), at(x2, y2), at(x3, y2), x);
+        double q3 = cerp(at(x0, y3), at(x1, y3), at(x2, y3), at(x3, y3), x);
+        
+        return cerp(q0, q1, q2, q3, y);
+    }
+    
     /* Advect grid in velocity field u, v with given timestep */
     void advect(double timestep, const FluidQuantity &u, const FluidQuantity &v) {
         for (int iy = 0, idx = 0; iy < _h; iy++) {
@@ -129,15 +158,14 @@ public:
                 double y = iy + _oy;
                 
                 /* First component: Integrate in time */
-                euler(x, y, timestep, u, v);
+                rungeKutta3(x, y, timestep, u, v);
                 
                 /* Second component: Interpolate from grid */
-                _dst[idx] = lerp(x, y);
+                _dst[idx] = cerp(x, y);
             }
         }
     }
     
-    /* Sets fluid quantity inside the given rect to value `v' */
     void addInflow(double x0, double y0, double x1, double y1, double v) {
         int ix0 = (int)(x0/_hx - _ox);
         int iy0 = (int)(y0/_hx - _oy);
@@ -150,29 +178,20 @@ public:
     }
 };
 
-/* Fluid solver class. Sets up the fluid quantities, forces incompressibility
- * performs advection and adds inflows.
- */
 class FluidSolver {
-    /* Fluid quantities */
     FluidQuantity *_d;
     FluidQuantity *_u;
     FluidQuantity *_v;
     
-    /* Width and height */
     int _w;
     int _h;
     
-    /* Grid cell size and fluid density */
     double _hx;
     double _density;
     
-    /* Arrays for: */
-    double *_r; /* Right hand side of pressure solve */
-    double *_p; /* Pressure solution */
+    double *_r;
+    double *_p;
     
-    
-    /* Builds the pressure right hand side as the negative divergence */
     void buildRhs() {
         double scale = 1.0/_hx;
         
@@ -184,10 +203,6 @@ class FluidSolver {
         }
     }
     
-    /* Performs the pressure solve using Gauss-Seidel.
-     * The solver will run as long as it takes to get the relative error below
-     * a threshold, but will never exceed `limit' iterations
-     */
     void project(int limit, double timestep) {
         double scale = timestep/(_density*_hx*_hx);
         
@@ -200,10 +215,6 @@ class FluidSolver {
                     
                     double diag = 0.0, offDiag = 0.0;
                     
-                    /* Here we build the matrix implicitly as the five-point
-                     * stencil. Grid borders are assumed to be solid, i.e.
-                     * there is no fluid outside the simulation domain.
-                     */
                     if (x > 0) {
                         diag    += scale;
                         offDiag -= scale*_p[idx - 1];
@@ -238,7 +249,6 @@ class FluidSolver {
         printf("Exceeded budget of %d iterations, maximum change was %f\n", limit, maxDelta);
     }
     
-    /* Applies the computed pressure to the velocity field */
     void applyPressure(double timestep) {
         double scale = timestep/(_density*_hx);
         
@@ -280,28 +290,21 @@ public:
         _u->advect(timestep, *_u, *_v);
         _v->advect(timestep, *_u, *_v);
         
-        /* Make effect of advection visible, since it's not an in-place operation */
         _d->flip();
         _u->flip();
         _v->flip();
     }
     
-    /* Set density and x/y velocity in given rectangle to d/u/v, respectively */
     void addInflow(double x, double y, double w, double h, double d, double u, double v) {
         _d->addInflow(x, y, x + w, y + h, d);
         _u->addInflow(x, y, x + w, y + h, u);
         _v->addInflow(x, y, x + w, y + h, v);
     }
     
-    /* Returns the maximum allowed timestep. Note that the actual timestep
-     * taken should usually be much below this to ensure accurate
-     * simulation - just never above.
-     */
     double maxTimestep() {
         double maxVelocity = 0.0;
         for (int y = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++) {
-                /* Average velocity at grid cell center */
                 double u = _u->lerp(x + 0.5, y + 0.5);
                 double v = _v->lerp(x + 0.5, y + 0.5);
                 
@@ -310,14 +313,12 @@ public:
             }
         }
         
-        /* Fluid should not flow more than two grid cells per iteration */
-        double maxTimestep = 2.0*_hx/maxVelocity;
+        /* Increased this to four grid cells due to cubic interpolation */
+        double maxTimestep = 4.0*_hx/maxVelocity;
         
-        /* Clamp to sensible maximum value in case of very small velocities */
         return min(maxTimestep, 1.0);
     }
     
-    /* Convert fluid density to RGBA image */
     void toImage(unsigned char *rgba) {
         for (int i = 0; i < _w*_h; i++) {
             int shade = (int)((1.0 - _d->src()[i])*255.0);
@@ -337,8 +338,8 @@ int main() {
     const int sizeY = 128;
     
     const double density = 0.1;
-    const double frameStep = 0.01999; /* Time between two frames */
-    const double maxTimestep = 0.005; /* Maximum timestep between two fluid iterations */
+    const double frameStep = 0.01999;
+    const double maxTimestep = 0.005;
     
     unsigned char *image = new unsigned char[sizeX*sizeY*4];
 
@@ -351,7 +352,6 @@ int main() {
         double nextTime = time + frameStep;
         do {
             double timestep = min(solver->maxTimestep(), maxTimestep);
-            /* Clamp time step not to overshoot the frame time */
             if (time + timestep >= nextTime) {
                 timestep = nextTime - time;
                 time = nextTime;
@@ -361,7 +361,7 @@ int main() {
             printf("Using timestep %f ", timestep);
             solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
             solver->update(timestep);
-            fflush(stdout); /* To make console output show up immediately on Windows */
+            fflush(stdout);
         } while (time < nextTime);
 
         solver->toImage(image);
