@@ -1,0 +1,6 @@
+# Binaries
+*.exe
+*.o
+
+# Generated images
+*.png
