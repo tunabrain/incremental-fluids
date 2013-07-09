@@ -301,24 +301,6 @@ public:
         _v->addInflow(x, y, x + w, y + h, v);
     }
     
-    double maxTimestep() {
-        double maxVelocity = 0.0;
-        for (int y = 0; y < _h; y++) {
-            for (int x = 0; x < _w; x++) {
-                double u = _u->lerp(x + 0.5, y + 0.5);
-                double v = _v->lerp(x + 0.5, y + 0.5);
-                
-                double velocity = sqrt(u*u + v*v);
-                maxVelocity = max(maxVelocity, velocity);
-            }
-        }
-        
-        /* Increased this to four grid cells due to cubic interpolation */
-        double maxTimestep = 4.0*_hx/maxVelocity;
-        
-        return min(maxTimestep, 1.0);
-    }
-    
     void toImage(unsigned char *rgba) {
         for (int i = 0; i < _w*_h; i++) {
             int shade = (int)((1.0 - _d->src()[i])*255.0);
@@ -338,8 +320,7 @@ int main() {
     const int sizeY = 128;
     
     const double density = 0.1;
-    const double frameStep = 0.01999;
-    const double maxTimestep = 0.005;
+    const double timestep = 0.005;
     
     unsigned char *image = new unsigned char[sizeX*sizeY*4];
 
@@ -349,20 +330,12 @@ int main() {
     int iterations = 0;
     
     while (time < 8.0) {
-        double nextTime = time + frameStep;
-        do {
-            double timestep = min(solver->maxTimestep(), maxTimestep);
-            if (time + timestep >= nextTime) {
-                timestep = nextTime - time;
-                time = nextTime;
-            } else
-                time += timestep;
-            
-            printf("Using timestep %f ", timestep);
+        for (int i = 0; i < 4; i++) {
             solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
             solver->update(timestep);
+            time += timestep;
             fflush(stdout);
-        } while (time < nextTime);
+        }
 
         solver->toImage(image);
         

@@ -43,10 +43,6 @@ class FluidQuantity {
         return a*(1.0 - x) + b*x;
     }
     
-    /* Cubic intERPolate using samples a through d for x ranging from 0 to 1.
-     * A Catmull-Rom spline is used. Over- and undershoots are clamped to
-     * prevent blow-up.
-     */
     double cerp(double a, double b, double c, double d, double x) const {
         double xsq = x*x;
         double xcu = xsq*x;
@@ -63,7 +59,6 @@ class FluidQuantity {
         return min(max(t, minV), maxV);
     }
     
-    /* Third order Runge-Kutta for velocity integration in time */
     void rungeKutta3(double &x, double &y, double timestep, const FluidQuantity &u, const FluidQuantity &v) const {
         double firstU = u.lerp(x, y)/_hx;
         double firstV = v.lerp(x, y)/_hx;
@@ -128,9 +123,6 @@ public:
         return lerp(lerp(x00, x10, x), lerp(x01, x11, x), y);
     }
     
-    /* Cubic intERPolate on grid at coordinates (x, y).
-     * Coordinates will be clamped to lie in simulation domain
-     */
     double cerp(double x, double y) const {
         x = min(max(x - _ox, 0.0), _w - 1.001);
         y = min(max(y - _oy, 0.0), _h - 1.001);
@@ -150,17 +142,14 @@ public:
         return cerp(q0, q1, q2, q3, y);
     }
     
-    /* Advect grid in velocity field u, v with given timestep */
     void advect(double timestep, const FluidQuantity &u, const FluidQuantity &v) {
         for (int iy = 0, idx = 0; iy < _h; iy++) {
             for (int ix = 0; ix < _w; ix++, idx++) {
                 double x = ix + _ox;
                 double y = iy + _oy;
                 
-                /* First component: Integrate in time */
                 rungeKutta3(x, y, timestep, u, v);
                 
-                /* Second component: Interpolate from grid */
                 _dst[idx] = cerp(x, y);
             }
         }
@@ -193,6 +182,7 @@ class FluidSolver {
     double *_p;
     double *_z; /* Auxiliary vector */
     double *_s; /* Search vector */
+    double *_precon; /* Preconditioner */
     
     double *_aDiag;  /* Matrix diagonal */
     double *_aPlusX; /* Matrix off-diagonals */
@@ -236,6 +226,66 @@ class FluidSolver {
         }
     }
     
+    /* Builds the modified incomplete Cholesky preconditioner */
+    void buildPreconditioner() {
+        const double tau = 0.97;
+        const double sigma = 0.25;
+
+        for (int y = 0, idx = 0; y < _h; y++) {
+            for (int x = 0; x < _w; x++, idx++) {
+                double e = _aDiag[idx];
+
+                if (x > 0) {
+                    double px = _aPlusX[idx - 1]*_precon[idx - 1];
+                    double py = _aPlusY[idx - 1]*_precon[idx - 1];
+                    e = e - (px*px + tau*px*py);
+                }
+                if (y > 0) {
+                    double px = _aPlusX[idx - _w]*_precon[idx - _w];
+                    double py = _aPlusY[idx - _w]*_precon[idx - _w];
+                    e = e - (py*py + tau*px*py);
+                }
+
+                if (e < sigma*_aDiag[idx])
+                    e = _aDiag[idx];
+
+                _precon[idx] = 1.0/sqrt(e);
+            }
+        }
+    }
+    
+    /* Apply preconditioner to vector `a' and store it in `dst' */
+    void applyPreconditioner(double *dst, double *a) {
+        for (int y = 0, idx = 0; y < _h; y++) {
+            for (int x = 0; x < _w; x++, idx++) {
+                double t = a[idx];
+
+                if (x > 0)
+                    t -= _aPlusX[idx -  1]*_precon[idx -  1]*dst[idx -  1];
+                if (y > 0)
+                    t -= _aPlusY[idx - _w]*_precon[idx - _w]*dst[idx - _w];
+
+                dst[idx] = t*_precon[idx];
+            }
+        }
+
+        for (int y = _h - 1, idx = _w*_h - 1; y >= 0; y--) {
+            for (int x = _w - 1; x >= 0; x--, idx--) {
+                idx = x + y*_w;
+                
+                
+                double t = dst[idx];
+
+                if (x < _w - 1)
+                    t -= _aPlusX[idx]*_precon[idx]*dst[idx +  1];
+                if (y < _h - 1)
+                    t -= _aPlusY[idx]*_precon[idx]*dst[idx + _w];
+
+                dst[idx] = t*_precon[idx];
+            }
+        }
+    }
+    
     /* Returns the dot product of vectors `a' and `b' */
     double dotProduct(double *a, double *b) {
         double result = 0.0;
@@ -254,9 +304,9 @@ class FluidSolver {
                     t += _aPlusX[idx -  1]*b[idx -  1];
                 if (y > 0)
                     t += _aPlusY[idx - _w]*b[idx - _w];
-                if (x < _w)
+                if (x < _w - 1)
                     t += _aPlusX[idx]*b[idx +  1];
-                if (y < _h)
+                if (y < _h - 1)
                     t += _aPlusY[idx]*b[idx + _w];
 
                 dst[idx] = t;
@@ -281,7 +331,7 @@ class FluidSolver {
     /* Conjugate gradients solver */
     void project(int limit) {
         memset(_p, 0,  _w*_h*sizeof(double)); /* Initial guess of zeroes */
-        memcpy(_z, _r, _w*_h*sizeof(double));
+        applyPreconditioner(_z, _r);
         memcpy(_s, _z, _w*_h*sizeof(double));
         
         double maxError = infinityNorm(_r);
@@ -302,7 +352,7 @@ class FluidSolver {
                 return;
             }
             
-            memcpy(_z, _r, _w*_h*sizeof(double));
+            applyPreconditioner(_z, _r);
             
             double sigmaNew = dotProduct(_z, _r);
             scaledAdd(_s, _z, _s, sigmaNew/sigma);
@@ -345,13 +395,13 @@ public:
         _aDiag  = new double[_w*_h];
         _aPlusX = new double[_w*_h];
         _aPlusY = new double[_w*_h];
-        
-        memset(_p, 0, _w*_h*sizeof(double));
+        _precon = new double[_w*_h];
     }
     
     void update(double timestep) {
         buildRhs();
         buildPressureMatrix(timestep);
+        buildPreconditioner();
         project(600);
         applyPressure(timestep);
         
@@ -368,23 +418,6 @@ public:
         _d->addInflow(x, y, x + w, y + h, d);
         _u->addInflow(x, y, x + w, y + h, u);
         _v->addInflow(x, y, x + w, y + h, v);
-    }
-    
-    double maxTimestep() {
-        double maxVelocity = 0.0;
-        for (int y = 0; y < _h; y++) {
-            for (int x = 0; x < _w; x++) {
-                double u = _u->lerp(x + 0.5, y + 0.5);
-                double v = _v->lerp(x + 0.5, y + 0.5);
-                
-                double velocity = sqrt(u*u + v*v);
-                maxVelocity = max(maxVelocity, velocity);
-            }
-        }
-        
-        double maxTimestep = 4.0*_hx/maxVelocity;
-        
-        return min(maxTimestep, 1.0);
     }
     
     void toImage(unsigned char *rgba) {
@@ -406,8 +439,7 @@ int main() {
     const int sizeY = 128;
     
     const double density = 0.1;
-    const double frameStep = 0.01999;
-    const double maxTimestep = 0.005;
+    const double timestep = 0.005;
     
     unsigned char *image = new unsigned char[sizeX*sizeY*4];
 
@@ -417,20 +449,12 @@ int main() {
     int iterations = 0;
     
     while (time < 8.0) {
-        double nextTime = time + frameStep;
-        do {
-            double timestep = min(solver->maxTimestep(), maxTimestep);
-            if (time + timestep >= nextTime) {
-                timestep = nextTime - time;
-                time = nextTime;
-            } else
-                time += timestep;
-            
-            printf("Using timestep %f ", timestep);
+        for (int i = 0; i < 4; i++) {
             solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
             solver->update(timestep);
+            time += timestep;
             fflush(stdout);
-        } while (time < nextTime);
+        }
 
         solver->toImage(image);
         

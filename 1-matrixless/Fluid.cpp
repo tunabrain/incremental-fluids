@@ -337,8 +337,7 @@ int main() {
     const int sizeY = 128;
     
     const double density = 0.1;
-    const double frameStep = 0.01999; /* Time between two frames */
-    const double maxTimestep = 0.005; /* Maximum timestep between two fluid iterations */
+    const double timestep = 0.005;
     
     unsigned char *image = new unsigned char[sizeX*sizeY*4];
 
@@ -348,21 +347,13 @@ int main() {
     int iterations = 0;
     
     while (time < 8.0) {
-        double nextTime = time + frameStep;
-        do {
-            double timestep = min(solver->maxTimestep(), maxTimestep);
-            /* Clamp time step not to overshoot the frame time */
-            if (time + timestep >= nextTime) {
-                timestep = nextTime - time;
-                time = nextTime;
-            } else
-                time += timestep;
-            
-            printf("Using timestep %f ", timestep);
+        /* Use four substeps per iteration */
+        for (int i = 0; i < 4; i++) {
             solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
             solver->update(timestep);
-            fflush(stdout); /* To make console output show up immediately on Windows */
-        } while (time < nextTime);
+            time += timestep;
+            fflush(stdout);
+        }
 
         solver->toImage(image);
         
