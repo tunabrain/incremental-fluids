@@ -42,33 +42,46 @@ template <typename T> int nsgn(T val) {
     return (val < T(0) ? -1 : 1);
 }
 
+/* Length of vector (x, y) */
 double length(double x, double y) {
     return sqrt(x*x + y*y);
 }
 
+/* Rotates point (x, y) by angle phi */
+void rotate(double &x, double &y, double phi) {
+    double tmpX = x, tmpY = y;
+    x =  cos(phi)*tmpX + sin(phi)*tmpY;
+    y = -sin(phi)*tmpX + cos(phi)*tmpY;
+}
+
+/* Enum to differentiate fluid and solid cells */
 enum CellType {
     CELL_FLUID,
     CELL_SOLID,
 };
 
+/* The base class representing solid bodies in the simulation.
+ * It holds information about position, scale and rotation of
+ * the solid as well as lateral and angular velocity.
+ *
+ * It does not represent any shape; this is handled by the subclasses.
+ * To expose the shape to the simulation, methods for evaluating the
+ * signed distance to the solid, the gradient of the distance function
+ * and the closest point on the surface of the solid are exposed.
+ */
 class SolidBody {
 protected:
-    double _posX;
+    double _posX; /* Position */
     double _posY;
-    double _scaleX;
+    double _scaleX; /* Scale */
     double _scaleY;
-    double _theta;
+    double _theta; /* Rotation */
     
-    double _velX;
+    double _velX; /* Lateral velocity */
     double _velY;
-    double _velTheta;
+    double _velTheta; /* Angular velocity */
     
-    void rotate(double &x, double &y, double phi) const {
-        double tmpX = x, tmpY = y;
-        x =  cos(phi)*tmpX + sin(phi)*tmpY;
-        y = -sin(phi)*tmpX + cos(phi)*tmpY;
-    }
-    
+    /* Transforms point (x, y) form the global to the local coordinate system */
     void globalToLocal(double &x, double &y) const {
         x -= _posX;
         y -= _posY;
@@ -77,6 +90,7 @@ protected:
         y /= _scaleY;
     }
     
+    /* Transforms point (x, y) form the local to the global coordinate system */
     void localToGlobal(double &x, double &y) const {
         x *= _scaleX;
         y *= _scaleY;
@@ -93,10 +107,16 @@ protected:
     virtual ~SolidBody() {};
     
 public:
+    /* Returns the signed distance from (x, y) to the nearest point on surface
+     * of the solid. The distance is negative if (x, y) is inside the solid
+     */
     virtual double distance(double x, double y) const = 0;
+    /* Changes (x, y) to lie on the closest point on the surface of the solid */
     virtual void closestSurfacePoint(double &x, double &y) const = 0;
+    /* Returns the gradient of the distance function at (x, y) in (nx, ny) */
     virtual void distanceNormal(double &nx, double &ny, double x, double y) const = 0;
     
+    /* Evaluates velocities of the solid at a given point */
     double velocityX(double x, double y) const {
         return (_posY - y)*_velTheta + _velX;
     }
@@ -121,6 +141,7 @@ public:
     }
 };
 
+/* Represents a box (square) of size 1x1. Can be scaled to the appropriate size */
 class SolidBox: public SolidBody {
 public:
     
@@ -172,6 +193,7 @@ public:
     }
 };
 
+/* Represents a sphere (circle) of diameter 1. Can be scaled to the appropriate size */
 class SolidSphere: public SolidBody {
 public:
     
@@ -215,10 +237,14 @@ class FluidQuantity {
     double *_src;
     double *_dst;
     
+    /* Normal of distance field at grid points */
     double *_normalX;
     double *_normalY;
+    /* Designates cells as fluid or solid cells (CELL_FLUID or CELL_SOLID) */
     uint8_t *_cell;
+    /* Specifies the index of the rigid body closes to a grid cell */
     uint8_t *_body;
+    /* Auxiliary array used for extrapolation */
     uint8_t *_mask;
 
     int _w;
@@ -354,6 +380,9 @@ public:
         return cerp(q0, q1, q2, q3, y);
     }
     
+    /* If the point (x, y) is inside a solid, project it back out to the
+     * closest point on the surface of the solid.
+     */
     void backProject(double &x, double &y, const vector<const SolidBody *> &bodies) {
         int rx = min(max((int)(x - _ox), 0), _w - 1);
         int ry = min(max((int)(y - _oy), 0), _h - 1);
@@ -378,6 +407,10 @@ public:
                     
                     rungeKutta3(x, y, timestep, u, v);
                     
+                    /* If integrating back in time leaves us inside a solid
+                     * boundary (due to numerical error), make sure we
+                     * interpolate from a point inside the fluid.
+                     */
                     backProject(x, y, bodies);
                     
                     _dst[idx] = cerp(x, y);
@@ -397,12 +430,14 @@ public:
                 _src[x + y*_w] = v;
     }
     
+    /* Fill all solid related fields - that is, _cell, _body and _normalX/Y */
     void fillSolidFields(const vector<const SolidBody *> &bodies) {
         for (int iy = 0, idx = 0; iy < _h; iy++) {
             for (int ix = 0; ix < _w; ix++, idx++) {
                 double x = (ix + _ox)*_hx;
                 double y = (iy + _oy)*_hx;
                 
+                /* Search closest solid */
                 _body[idx] = 0;
                 double d = bodies[0]->distance(x, y);
                 for (unsigned i = 1; i < bodies.size(); i++) {
@@ -413,6 +448,9 @@ public:
                     }
                 }
                 
+                /* If distance to closest solid is negative, this cell must be
+                 * inside it
+                 */
                 if (d < 0.0)
                     _cell[idx] = CELL_SOLID;
                 else
@@ -423,6 +461,32 @@ public:
         }
     }
     
+    /* Prepare auxiliary array for extrapolation.
+     * The purpose of extrapolation is to extrapolate fluid quantities into
+     * solids, where these quantities would normally be undefined. However, we
+     * need these values for stable interpolation and boundary conditions.
+     *
+     * The way these are extrapolated here is by essentially solving a PDE,
+     * such that the gradient of the fluid quantity is 0 along the gradient
+     * of the distance field. This is essentially a more robust formulation of
+     * "Set quantity inside solid to the value at the closest point on the
+     * solid-fluid boundary"
+     *
+     * This PDE has a particular form which makes it very easy to solve exactly
+     * using an upwinding scheme. What this means is that we can solve it from
+     * outside-to-inside, with information flowing along the normal from the
+     * boundary.
+     *
+     * Specifically, we can solve for the value inside a fluid cell using
+     * extrapolateNormal if the two adjacent grid cells in "upstream" direction
+     * (where the normal points to) are either fluid cells or have been solved
+     * for already.
+     *
+     * The mask array keeps track of which cells wait for which values. If an
+     * entry is 0, it means both neighbours are available and the cell is ready
+     * for the PDE solve. If it is 1, the cell waits for the neighbour in
+     * x direction, 2 for y-direction and 3 for both.
+     */
     void fillSolidMask() {
         for (int y = 1; y < _h - 1; y++) {
             for (int x = 1; x < _w - 1; x++) {
@@ -436,13 +500,16 @@ public:
 
                 _mask[idx] = 0;
                 if (nx != 0.0 && _cell[idx + sgn(nx)]    != CELL_FLUID)
-                    _mask[idx] |= 1;
+                    _mask[idx] |= 1; /* Neighbour in normal x direction is blocked */
                 if (ny != 0.0 && _cell[idx + sgn(ny)*_w] != CELL_FLUID)
-                    _mask[idx] |= 2;
+                    _mask[idx] |= 2; /* Neighbour in normal y direction is blocked */
             }
         }
     }
-    
+    /* Solve for value at index idx using values of neighbours in normal x/y
+     * direction. The value is computed such that the directional derivative
+     * along distance field normal is 0.
+     */
     double extrapolateNormal(int idx) {
         double nx = _normalX[idx];
         double ny = _normalY[idx];
@@ -453,6 +520,10 @@ public:
         return (fabs(nx)*srcX + fabs(ny)*srcY)/(fabs(nx) + fabs(ny));
     }
     
+    /* Given that a neighbour in upstream direction specified by mask (1=x, 2=y)
+     * now has been solved for, update the mask appropriately and, if this cell
+     * can now be computed, add it to the queue of ready cells
+     */
     void freeNeighbour(int idx, stack<int> &border, int mask) {
         _mask[idx] &= ~mask;
         if (_cell[idx] != CELL_FLUID && _mask[idx] == 0)
@@ -462,7 +533,11 @@ public:
     void extrapolate() {
         fillSolidMask();
 
+        /* Queue of cells which can be computed */
         stack<int> border;
+        /* Initialize queue by finding all solid cells with mask=0 (ready for
+         * extrapolation)
+         */
         for (int y = 1; y < _h - 1; y++) {
             for (int x = 1; x < _w - 1; x++) {
                 int idx = x + y*_w;
@@ -476,8 +551,12 @@ public:
             int idx = border.top();
             border.pop();
 
+            /* Solve for value in cell */
             _src[idx] = extrapolateNormal(idx);
 
+            /* Notify adjacent cells that this cell has been computed and can
+             * be used as an upstream value
+             */
             if (_normalX[idx - 1] > 0.0)
                 freeNeighbour(idx -  1, border, 1);
             if (_normalX[idx + 1] < 0.0)
@@ -495,6 +574,7 @@ class FluidSolver {
     FluidQuantity *_u;
     FluidQuantity *_v;
     
+    /* List of solid bodies to consider in the simulation */
     const vector<const SolidBody *> &_bodies;
     
     int _w;
@@ -711,6 +791,7 @@ class FluidSolver {
         }
     }
     
+    /* Sets all velocity cells bordering solid cells to the solid velocity */
     void setBoundaryCondition() {
         const uint8_t *cell = _d->cell();
         const uint8_t *body = _d->body();
@@ -816,6 +897,11 @@ int main() {
     vector<SolidBody *> bodies;
     bodies.push_back(new SolidBox(0.5, 0.6, 0.7, 0.1, M_PI*0.25, 0.0, 0.0, 0.0));
     
+    /* Unfortunately we need a second vector here - the first one allows us to
+     * modify bodies with the update method, this one is a const vector the
+     * fluid solver is allowed to work with. Unfortunately C++ does not allow
+     * us to cast a non-const to a const vector, so we need a separate one.
+     */
     vector<const SolidBody *> cBodies;
     for (unsigned i = 0; i < bodies.size(); i++)
         cBodies.push_back(bodies[i]);
@@ -825,7 +911,7 @@ int main() {
     double time = 0.0;
     int iterations = 0;
     
-    while (time < 800.0) {
+    while (time < 8.0) {
         for (int i = 0; i < 4; i++) {
             solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
             solver->update(timestep);
