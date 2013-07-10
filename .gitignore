@@ -2,5 +2,6 @@
 *.exe
 *.o
 
-# Generated images
+# Generated images/videos
 *.png
+*.mp4
