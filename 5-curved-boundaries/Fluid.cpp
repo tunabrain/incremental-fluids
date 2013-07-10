@@ -97,25 +97,25 @@ double occupancy(double d11, double d12, double d21, double d22) {
     /* All outside */
 	case 0x0: return 0.0;
     /* One inside */
-	case 0x1: return triangle_occupancy(d21, d11, d12);
-	case 0x2: return triangle_occupancy(d11, d12, d22);
-	case 0x4: return triangle_occupancy(d12, d22, d21);
-	case 0x8: return triangle_occupancy(d22, d21, d11);
+	case 0x1: return triangleOccupancy(d21, d11, d12);
+	case 0x2: return triangleOccupancy(d11, d12, d22);
+	case 0x4: return triangleOccupancy(d12, d22, d21);
+	case 0x8: return triangleOccupancy(d22, d21, d11);
     /* One outside */
-	case 0xE: return 1.0 - triangle_occupancy(-d21, -d11, -d12);
-	case 0xD: return 1.0 - triangle_occupancy(-d11, -d12, -d22);
-	case 0xB: return 1.0 - triangle_occupancy(-d12, -d22, -d21);
-	case 0x7: return 1.0 - triangle_occupancy(-d22, -d21, -d11);
+	case 0xE: return 1.0 - triangleOccupancy(-d21, -d11, -d12);
+	case 0xD: return 1.0 - triangleOccupancy(-d11, -d12, -d22);
+	case 0xB: return 1.0 - triangleOccupancy(-d12, -d22, -d21);
+	case 0x7: return 1.0 - triangleOccupancy(-d22, -d21, -d11);
     /* Two adjacent inside */
-	case 0x3: return quad_occupancy(d21, d22, d11, d12);
-	case 0x6: return quad_occupancy(d11, d21, d12, d22);
-	case 0x9: return quad_occupancy(d12, d22, d11, d21);
-	case 0xC: return quad_occupancy(d11, d12, d21, d22);
+	case 0x3: return trapezoidOccupancy(d21, d22, d11, d12);
+	case 0x6: return trapezoidOccupancy(d11, d21, d12, d22);
+	case 0x9: return trapezoidOccupancy(d12, d22, d11, d21);
+	case 0xC: return trapezoidOccupancy(d11, d12, d21, d22);
     /* Two opposed inside */
-	case 0x5: return triangle_occupancy(d11, d12, d22) +
-		             triangle_occupancy(d22, d21, d11);
-	case 0xA: return triangle_occupancy(d21, d11, d12) +
-		             triangle_occupancy(d12, d22, d21);
+	case 0x5: return triangleOccupancy(d11, d12, d22) +
+		             triangleOccupancy(d22, d21, d11);
+	case 0xA: return triangleOccupancy(d21, d11, d12) +
+		             triangleOccupancy(d12, d22, d21);
     /* All inside */
 	case 0xF: return 1.0;
 	}
