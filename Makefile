@@ -9,18 +9,21 @@ DIR_2 = 2-better-advection/
 DIR_3 = 3-conjugate-gradients/
 DIR_4 = 4-solid-boundaries/
 DIR_5 = 5-curved-boundaries/
+DIR_6 = 6-heat/
 SRCF_1 = $(DIR_1)Fluid.cpp
 SRCF_2 = $(DIR_2)Fluid.cpp
 SRCF_3 = $(DIR_3)Fluid.cpp
 SRCF_4 = $(DIR_4)Fluid.cpp
 SRCF_5 = $(DIR_5)Fluid.cpp
+SRCF_6 = $(DIR_6)Fluid.cpp
 OBJF_1 = $(subst .cpp,.o,$(SRCF_1))
 OBJF_2 = $(subst .cpp,.o,$(SRCF_2))
 OBJF_3 = $(subst .cpp,.o,$(SRCF_3))
 OBJF_4 = $(subst .cpp,.o,$(SRCF_4))
 OBJF_5 = $(subst .cpp,.o,$(SRCF_5))
+OBJF_6 = $(subst .cpp,.o,$(SRCF_6))
 
-all: matrixless better-advection conjugate-gradients solid-boundaries curved-boundaries
+all: matrixless better-advection conjugate-gradients solid-boundaries curved-boundaries heat
 
 matrixless: $(OBJF_1) $(LODEPNGOBJ)
 	$(CXX) -o $(DIR_1)$@ $^ $(LDFLAGS) 
@@ -36,6 +39,9 @@ solid-boundaries: $(OBJF_4) $(LODEPNGOBJ)
     
 curved-boundaries: $(OBJF_5) $(LODEPNGOBJ)
 	$(CXX) -o $(DIR_5)$@ $^ $(LDFLAGS) 
+    
+heat: $(OBJF_6) $(LODEPNGOBJ)
+	$(CXX) -o $(DIR_6)$@ $^ $(LDFLAGS) 
 
 %.o: %.cpp
 	$(CXX) $(CFLAGS) -c -o $@ $^
@@ -54,6 +60,8 @@ clean:
 	rm -f $(OBJF_4)
 	rm -f $(DIR_5)curved-boundaries
 	rm -f $(OBJF_5)
+	rm -f $(DIR_6)heat
+	rm -f $(OBJF_6)
 	rm -f lodepng/lodepng.o
 
 .PHONY: clean all 
