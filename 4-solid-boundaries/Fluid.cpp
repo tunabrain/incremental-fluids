@@ -330,14 +330,6 @@ public:
         return _body;
     }
     
-    double offsetX() const {
-        return _ox;
-    }
-    
-    double offsetY() const {
-        return _oy;
-    }
-    
     double at(int x, int y) const {
         return _src[x + y*_w];
     }

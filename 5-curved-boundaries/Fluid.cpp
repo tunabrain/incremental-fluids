@@ -32,12 +32,10 @@ freely, subject to the following restrictions:
 
 using namespace std;
 
-/* See http://stackoverflow.com/questions/1903954/is-there-a-standard-sign-function-signum-sgn-in-c-c */
 template <typename T> int sgn(T val) {
     return (T(0) < val) - (val < T(0));
 }
 
-/* Non-zero sgn */
 template <typename T> int nsgn(T val) {
     return (val < T(0) ? -1 : 1);
 }
@@ -46,44 +44,79 @@ double length(double x, double y) {
     return sqrt(x*x + y*y);
 }
 
-double triangle_occupancy(double out1, double in, double out2) {
+void rotate(double &x, double &y, double phi) {
+    double tmpX = x, tmpY = y;
+    x =  cos(phi)*tmpX + sin(phi)*tmpY;
+    y = -sin(phi)*tmpX + cos(phi)*tmpY;
+}
+
+/* For three corners in a 1x1 square, with `in' being adjacent to `out1' and
+ * `out2' and all three parameters being distances to a surface, `in' being
+ * inside the surface and `out1' and `out2' outside, returns the area of the
+ * square occupied by the surface.
+ */
+double triangleOccupancy(double out1, double in, double out2) {
 	return 0.5*in*in/((out1 - in)*(out2 - in));
 }
 
-double quad_occupancy(double out1, double out2, double in1, double in2) {
+/* For four corners in a 1x1 square, with all parameters being distances to a
+ * surface and `in1' and `in2 inside the surface, returns the are of the square
+ * occupied by the surface.
+ */
+double trapezoidOccupancy(double out1, double out2, double in1, double in2) {
 	return 0.5*(-in1/(out1 - in1) - in2/(out2 - in2));
 }
 
+/* Given the distance of four corners in a 1x1 square to a surface, returns the
+ * area of the part of the square occupied by the surface computed analytically.
+ *
+ * The basic workings of this algorithm are quite similar to marching squares
+ * (2D marching cubes). First, a mask is computed based on which corners are
+ * inside and which are outside.
+ * Based on this mask, the function differentiates between one of four cases:
+ * a) Only one corner is inside
+ *   => Compute using triangle area
+ * b) Only one corner is outside
+ *   => Invert distance field, compute 1 - triangle area
+ * c) Two adjacent corners are inside
+ *   => Compute using trapezoid area
+ * d) Two opposing corners are inside
+ *   => Compute as sum of area of two independent triangles
+ *
+ * The two remaining cases, all corners outside/inside, can be computed trivially
+ */
 double occupancy(double d11, double d12, double d21, double d22) {
 	double ds[] = {d11, d12, d22, d21};
 
-	char b = 0;
+    /* Compute mask */
+	uint8_t b = 0;
 	for (int i = 3; i >= 0; i--)
 		b = (b << 1) | (ds[i] < 0.0 ? 1 : 0);
     
 	switch (b) {
+    /* All outside */
 	case 0x0: return 0.0;
-
+    /* One inside */
 	case 0x1: return triangle_occupancy(d21, d11, d12);
 	case 0x2: return triangle_occupancy(d11, d12, d22);
 	case 0x4: return triangle_occupancy(d12, d22, d21);
 	case 0x8: return triangle_occupancy(d22, d21, d11);
-
+    /* One outside */
 	case 0xE: return 1.0 - triangle_occupancy(-d21, -d11, -d12);
 	case 0xD: return 1.0 - triangle_occupancy(-d11, -d12, -d22);
 	case 0xB: return 1.0 - triangle_occupancy(-d12, -d22, -d21);
 	case 0x7: return 1.0 - triangle_occupancy(-d22, -d21, -d11);
-
+    /* Two adjacent inside */
 	case 0x3: return quad_occupancy(d21, d22, d11, d12);
 	case 0x6: return quad_occupancy(d11, d21, d12, d22);
 	case 0x9: return quad_occupancy(d12, d22, d11, d21);
 	case 0xC: return quad_occupancy(d11, d12, d21, d22);
-
+    /* Two opposed inside */
 	case 0x5: return triangle_occupancy(d11, d12, d22) +
 		             triangle_occupancy(d22, d21, d11);
 	case 0xA: return triangle_occupancy(d21, d11, d12) +
 		             triangle_occupancy(d12, d22, d21);
-
+    /* All inside */
 	case 0xF: return 1.0;
 	}
 }
@@ -104,12 +137,6 @@ protected:
     double _velX;
     double _velY;
     double _velTheta;
-    
-    void rotate(double &x, double &y, double phi) const {
-        double tmpX = x, tmpY = y;
-        x =  cos(phi)*tmpX + sin(phi)*tmpY;
-        y = -sin(phi)*tmpX + cos(phi)*tmpY;
-    }
     
     void globalToLocal(double &x, double &y) const {
         x -= _posX;
@@ -153,10 +180,6 @@ public:
     }
     
     void update(double timestep) {
-        /* Simple Euler integration - enough for solid bodies, since they
-         * are not influenced by the simulation and velocities are typically
-         * static
-         */
         _posX  += _velX*timestep;
         _posY  += _velY*timestep;
         _theta += _velTheta*timestep;
@@ -257,10 +280,19 @@ class FluidQuantity {
     double *_src;
     double *_dst;
     
+    /* Distance field induced by solids.
+     * Since this is used to compute the cell volumes, the samples are offset
+     * by (-0.5, -0.5) from the samples in _src and the grid is one larger in
+     * each dimension. This way, each sample of fluid quantity has four samples
+     * of the distance function surrounding it - perfect for computing the
+     * cell volumes.
+     */
     double *_phi;
+    /* Fractional cell volume occupied by fluid */
+    double *_volume;
+    
     double *_normalX;
     double *_normalY;
-    double *_volume;
     uint8_t *_cell;
     uint8_t *_body;
     uint8_t *_mask;
@@ -317,10 +349,11 @@ public:
         _src = new double[_w*_h];
         _dst = new double[_w*_h];
         
+        /* Make distance grid one larger in each dimension */
         _phi = new double[(_w + 1)*(_h + 1)];
+        _volume  = new double[_w*_h];
         _normalX = new double[_w*_h];
         _normalY = new double[_w*_h];
-        _volume  = new double[_w*_h];
         
         _cell = new uint8_t[_w*_h];
         _body = new uint8_t[_w*_h];
@@ -332,10 +365,6 @@ public:
     ~FluidQuantity() {
         delete[] _src;
         delete[] _dst;
-    }
-    
-    void copy() {
-        memcpy(_dst, _src, _w*_h*sizeof(double));
     }
     
     void flip() {
@@ -354,19 +383,6 @@ public:
         return _body;
     }
     
-    double offsetX() const {
-        return _ox;
-    }
-    
-    double offsetY() const {
-        return _oy;
-    }
-    
-    void normal(double &nx, double &ny, int x, int y) const {
-        nx = _normalX[x + y*_w];
-        ny = _normalY[x + y*_w];
-    }
-    
     double at(int x, int y) const {
         return _src[x + y*_w];
     }
@@ -377,10 +393,6 @@ public:
     
     double &at(int x, int y) {
         return _src[x + y*_w];
-    }
-    
-    double &dstAt(int x, int y) {
-        return _dst[x + y*_w];
     }
     
     double lerp(double x, double y) const {
@@ -444,8 +456,7 @@ public:
                     backProject(x, y, bodies);
                     
                     _dst[idx] = cerp(x, y);
-                } else if (clear)
-                    _dst[idx] = 0.0;
+                }
             }
         }
     }
@@ -462,6 +473,7 @@ public:
     }
     
     void fillSolidFields(const vector<const SolidBody *> &bodies) {
+        /* Compute distance field first */
         for (int iy = 0, idx = 0; iy <= _h; iy++) {
             for (int ix = 0; ix <= _w; ix++, idx++) {
                 double x = (ix + _ox - 0.5)*_hx;
@@ -481,24 +493,29 @@ public:
                 _body[idx] = 0;
                 double d = bodies[0]->distance(x, y);
                 for (unsigned i = 1; i < bodies.size(); i++) {
-                    double dd = bodies[i]->distance(x, y);
-                    if (dd < d) {
+                    double id = bodies[i]->distance(x, y);
+                    if (id < d) {
                         _body[idx] = i;
-                        d = dd;
+                        d = id;
                     }
                 }
                 
+                /* Compute cell volume from the four adjacent distance samples */
                 int idxp = ix + iy*(_w + 1);
                 _volume[idx] = 1.0 - occupancy(
                     _phi[idxp],          _phi[idxp + 1],
                     _phi[idxp + _w + 1], _phi[idxp + _w + 2]
                 );
                 
+                /* Clamp dangerously small cell volumes - could break numerical
+                 * solver otherwise
+                 */
                 if (_volume[idx] < 0.01)
                     _volume[idx] = 0.0;
                 
                 bodies[_body[idx]]->distanceNormal(_normalX[idx], _normalY[idx], x, y);
                 
+                /* Solid cells are now defined as cells with zero fluid volume */
                 if (_volume[idx] == 0.0)
                     _cell[idx] = CELL_SOLID;
                 else
@@ -597,6 +614,9 @@ class FluidSolver {
     double *_aPlusX;
     double *_aPlusY;
     
+    /* We now modify the right hand side to "blend" between solid and fluid
+     * velocity based on the cell volume occupied by fluid.
+     */
     void buildRhs() {
         double scale = 1.0/_hx;
         const uint8_t *cell = _d->cell();
@@ -625,6 +645,7 @@ class FluidSolver {
         }
     }
     
+    /* Entries of the pressure matrix are modified accordingly */
     void buildPressureMatrix(double timestep) {
         double scale = timestep/(_density*_hx*_hx);
         const uint8_t *cell = _d->cell();
@@ -870,9 +891,9 @@ public:
         
         setBoundaryCondition();
         
-        _d->advect(timestep, *_u, *_v, _bodies, true);
-        _u->advect(timestep, *_u, *_v, _bodies, false);
-        _v->advect(timestep, *_u, *_v, _bodies, false);
+        _d->advect(timestep, *_u, *_v, _bodies);
+        _u->advect(timestep, *_u, *_v, _bodies);
+        _v->advect(timestep, *_u, *_v, _bodies);
         
         _d->flip();
         _u->flip();
@@ -887,6 +908,7 @@ public:
     
     void toImage(unsigned char *rgba) {
         for (int i = 0; i < _w*_h; i++) {
+            /* Use fluid volume for nice anti aliasing */
             int shade = (int)((1.0 - _d->src()[i])*_d->volume(i % _w, i/_w)*255.0);
             shade = max(min(shade, 255), 0);
             
@@ -900,8 +922,8 @@ public:
 
 int main() {
     /* Play with these constants, if you want */
-    const int sizeX = 512;
-    const int sizeY = 512;
+    const int sizeX = 128;
+    const int sizeY = 128;
     
     const double density = 0.1;
     const double timestep = 0.005;
@@ -910,19 +932,17 @@ int main() {
     
     vector<SolidBody *> bodies;
     bodies.push_back(new SolidBox(0.5, 0.6, 0.7, 0.1, M_PI*0.25, 0.0, 0.0, 0.0));
-    //bodies.push_back(new SolidSphere(0.5, 0.5, 0.3, 0.0, 0.0, 0.1, 0.0));
     
     vector<const SolidBody *> cBodies;
     for (unsigned i = 0; i < bodies.size(); i++)
         cBodies.push_back(bodies[i]);
 
     FluidSolver *solver = new FluidSolver(sizeX, sizeY, density, cBodies);
-    //solver->addInflow(0.0, 0.0, 1.0, 0.5, 1.0, 0.0, 0.0);
 
     double time = 0.0;
     int iterations = 0;
     
-    while (time < 800.0) {
+    while (time < 8.0) {
         for (int i = 0; i < 4; i++) {
             solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
             solver->update(timestep);
