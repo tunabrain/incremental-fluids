@@ -146,7 +146,8 @@ public:
         
         for (int y = max(iy0, 0); y < min(iy1, _h); y++)
             for (int x = max(ix0, 0); x < min(ix1, _h); x++)
-                _src[x + y*_w] = v;
+                if (fabs(_src[x + y*_w]) < fabs(v))
+                    _src[x + y*_w] = v;
     }
 };
 

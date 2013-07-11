@@ -44,6 +44,11 @@ double length(double x, double y) {
     return sqrt(x*x + y*y);
 }
 
+double cubicPulse(double x) {
+    x = min(fabs(x), 1.0);
+    return 1.0 - x*x*(3.0 - 2.0*x);
+}
+
 void rotate(double &x, double &y, double phi) {
     double tmpX = x, tmpY = y;
     x =  cos(phi)*tmpX + sin(phi)*tmpY;
@@ -320,6 +325,11 @@ public:
         _body = new uint8_t[_w*_h];
         _mask = new uint8_t[_w*_h];
         
+        for (int i = 0; i < _w*_h; i++) {
+            _cell[i] = CELL_FLUID;
+            _volume[i] = 1.0;
+        }
+        
         memset(_src, 0, _w*_h*sizeof(double));
     }
     
@@ -432,12 +442,23 @@ public:
         int ix1 = (int)(x1/_hx - _ox);
         int iy1 = (int)(y1/_hx - _oy);
         
-        for (int y = max(iy0, 0); y < min(iy1, _h); y++)
-            for (int x = max(ix0, 0); x < min(ix1, _h); x++)
-                _src[x + y*_w] = v;
+        for (int y = max(iy0, 0); y < min(iy1, _h); y++) {
+            for (int x = max(ix0, 0); x < min(ix1, _h); x++) {
+                double l = length(
+                    (2.0*(x + 0.5)*_hx - (x0 + x1))/(x1 - x0),
+                    (2.0*(y + 0.5)*_hx - (y0 + y1))/(y1 - y0)
+                );
+                double vi = cubicPulse(l)*v;
+                if (fabs(_src[x + y*_w]) < fabs(vi))
+                    _src[x + y*_w] = vi;
+            }
+        }
     }
     
     void fillSolidFields(const vector<const SolidBody *> &bodies) {
+        if (bodies.empty())
+            return;
+        
         for (int iy = 0, idx = 0; iy <= _h; iy++) {
             for (int ix = 0; ix <= _w; ix++, idx++) {
                 double x = (ix + _ox - 0.5)*_hx;
@@ -551,7 +572,7 @@ public:
 };
 
 class FluidSolver {
-    /* Ambient temperature (here room temperature, Kelvin) */
+    /* Ambient temperature (here room temperature), in Kelvin */
     static const double _tAmb = 294.0;
     /* Gravity */
     static const double _g    = 9.81;
@@ -567,9 +588,9 @@ class FluidSolver {
     int _h;
     
     double _hx;
-    double _densityAir;
-    double _densitySoot;
-    double _diffusion;
+    double _densityAir;  /* Density of air */
+    double _densitySoot; /* Density of soot */
+    double _diffusion;   /* Diffusion rate of heat */
     
     double *_r;
     double *_p;
@@ -594,6 +615,9 @@ class FluidSolver {
                          _v->volume(x, y + 1)*_v->at(x, y + 1) - _v->volume(x, y)*_v->at(x, y));
                     
                     double vol = _d->volume(x, y);
+                    
+                    if (_bodies.empty())
+                        continue;
                     
                     if (x > 0)
                         _r[idx] -= (_u->volume(x, y) - vol)*_bodies[body[idx -  1]]->velocityX(x*_hx, (y + 0.5)*_hx);
@@ -909,14 +933,21 @@ public:
     
     void update(double timestep) {
         _d->fillSolidFields(_bodies);
+        _t->fillSolidFields(_bodies);
         _u->fillSolidFields(_bodies);
         _v->fillSolidFields(_bodies);
         
+        /* Right-hand side of heat equation is the current heat distribution */
         memcpy(_r, _t->src(), _w*_h*sizeof(double));
         buildHeatDiffusionMatrix(timestep);
         buildPreconditioner();
         project(2000);
+        /* The solution of the heat equation is the heat distribution in the
+         * next timestep.
+         */
         memcpy(_t->src(), _p, _w*_h*sizeof(double));
+        
+        _t->extrapolate();
         
         addBuoyancy(timestep);
         setBoundaryCondition();
@@ -934,10 +965,12 @@ public:
         setBoundaryCondition();
         
         _d->advect(timestep, *_u, *_v, _bodies);
+        _t->advect(timestep, *_u, *_v, _bodies);
         _u->advect(timestep, *_u, *_v, _bodies);
         _v->advect(timestep, *_u, *_v, _bodies);
         
         _d->flip();
+        _t->flip();
         _u->flip();
         _v->flip();
     }
@@ -953,28 +986,39 @@ public:
         return _tAmb;
     }
     
-    void toImage(unsigned char *rgba) {
-        for (int i = 0; i < _w*_h; i++) {
-            double volume = 1.0 - _d->volume(i % _w, i/_w);
-            double shade = min(_d->src()[i], 1.0)*(1.0 - volume) + volume;
-            double t = (_t->src()[i] - _tAmb)/1000.0;
-            t = min(max(t, 0.0), 1.0);
-            
-            double r = min(t*4.0, 1.0);
-            double g = min(t*2.0, 1.0);
-            double b = min(t*4.0 - 3.0, 1.0);
-            b = max(b, 0.0);
-            
-            r = r*(1.0 - shade) + shade;
-            g = g*(1.0 - shade) + shade;
-            b = b*(1.0 - shade) + shade;
-            
-            r = g = b = 1.0 - shade;
-            
-            rgba[i*4 + 0] = (int)(r*255.0);
-            rgba[i*4 + 1] = (int)(g*255.0);
-            rgba[i*4 + 2] = (int)(b*255.0);
-            rgba[i*4 + 3] = 0xFF;
+    void toImage(unsigned char *rgba, bool renderHeat) {
+        for (int y = 0; y < _h; y++) {
+            for (int x = 0; x < _w; x++) {
+                int idxl, idxr;
+                if (renderHeat) {
+                    idxl = 4*(x + y*_w*2);
+                    idxr = 4*(x + y*_w*2 + _w);
+                } else
+                    idxr = 4*(x + y*_w);
+                
+                double volume = _d->volume(x, y);
+                
+                double shade = (1.0 - _d->at(x, y))*volume;
+                shade = min(max(shade, 0.0), 1.0);
+                rgba[idxr + 0] = (int)(shade*255.0);
+                rgba[idxr + 1] = (int)(shade*255.0);
+                rgba[idxr + 2] = (int)(shade*255.0);
+                rgba[idxr + 3] = 0xFF;
+                
+                if (renderHeat) {
+                    double t = (_t->at(x, y) - _tAmb)/700.0;
+                    t = min(max(t, 0.0), 1.0);
+                    
+                    double r = 1.0 + volume*(min(t*4.0, 1.0) - 1.0);
+                    double g = 1.0 + volume*(min(t*2.0, 1.0) - 1.0);
+                    double b = 1.0 + volume*(max(min(t*4.0 - 3.0, 1.0), 0.0) - 1.0);
+                    
+                    rgba[idxl + 0] = (int)(r*255.0);
+                    rgba[idxl + 1] = (int)(g*255.0);
+                    rgba[idxl + 2] = (int)(b*255.0);
+                    rgba[idxl + 3] = 0xFF;
+                }
+            }
         }
     }
 };
@@ -985,14 +1029,16 @@ int main() {
     const int sizeY = 128;
     
     const double densityAir = 0.1;
-    const double densitySoot = 1.0;
-    const double diffusion = 0.1;
+    const double densitySoot = 0.1; /* You can make this larger to get heavy smoke */
+    const double diffusion = 0.01;
     const double timestep = 0.005;
     
-    unsigned char *image = new unsigned char[sizeX*sizeY*4];
+    const bool renderHeat = true; /* Set this to false to disable heat rendering */
+    
+    unsigned char *image = new unsigned char[sizeX*2*sizeY*4];
     
     vector<SolidBody *> bodies;
-    bodies.push_back(new SolidBox(0.5, 0.6, 0.7, 0.1, M_PI*0.25, 0.0, 0.0, 0.0));
+    bodies.push_back(new SolidBox(0.3, 0.6, 0.1, 0.5, -M_PI*0.05, 0.0, 0.0, 0.0));
     
     vector<const SolidBody *> cBodies;
     for (unsigned i = 0; i < bodies.size(); i++)
@@ -1004,22 +1050,21 @@ int main() {
     int iterations = 0;
     
     while (time < 8.0) {
-        for (int i = 0; i < 4; i++) {
-            solver->addInflow(0.45, 0.2, 0.1, 0.05, 1.0, solver->ambientT(), 0.0, 0.0);
-            //solver->addInflow(0.65, 0.8, 0.1, 0.05, 1.0, solver->ambientT() + 1000.0, 0.0, 0.0);
+        for (int i = 0; i < 10; i++) {
+            solver->addInflow(0.35, 0.9, 0.1, 0.05, 1.0, solver->ambientT() + 300.0, 0.0, 0.0);
             solver->update(timestep);
             time += timestep;
             fflush(stdout);
-            
-            solver->toImage(image);
-            
-            char path[256];
-            sprintf(path, "Frame%05d.png", iterations++);
-            lodepng_encode32_file(path, image, sizeX, sizeY);
-            
-            for (unsigned i = 0; i < bodies.size(); i++)
-                bodies[i]->update(timestep);
         }
+        
+        solver->toImage(image, renderHeat);
+        
+        char path[256];
+        sprintf(path, "Frame%05d.png", iterations++);
+        lodepng_encode32_file(path, image, (renderHeat ? sizeX*2 : sizeX), sizeY);
+        
+        for (unsigned i = 0; i < bodies.size(); i++)
+            bodies[i]->update(timestep);
     }
 
     return 0;

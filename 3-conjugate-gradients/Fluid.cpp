@@ -29,6 +29,15 @@ freely, subject to the following restrictions:
 
 using namespace std;
 
+double length(double x, double y) {
+    return sqrt(x*x + y*y);
+}
+
+double cubicPulse(double x) {
+    x = min(fabs(x), 1.0);
+    return 1.0 - x*x*(3.0 - 2.0*x);
+}
+
 class FluidQuantity {
     double *_src;
     double *_dst;
@@ -161,9 +170,17 @@ public:
         int ix1 = (int)(x1/_hx - _ox);
         int iy1 = (int)(y1/_hx - _oy);
         
-        for (int y = max(iy0, 0); y < min(iy1, _h); y++)
-            for (int x = max(ix0, 0); x < min(ix1, _h); x++)
-                _src[x + y*_w] = v;
+        for (int y = max(iy0, 0); y < min(iy1, _h); y++) {
+            for (int x = max(ix0, 0); x < min(ix1, _h); x++) {
+                double l = length(
+                    (2.0*(x + 0.5)*_hx - (x0 + x1))/(x1 - x0),
+                    (2.0*(y + 0.5)*_hx - (y0 + y1))/(y1 - y0)
+                );
+                double vi = cubicPulse(l)*v;
+                if (fabs(_src[x + y*_w]) < fabs(vi))
+                    _src[x + y*_w] = vi;
+            }
+        }
     }
 };
 
@@ -450,7 +467,7 @@ int main() {
     
     while (time < 8.0) {
         for (int i = 0; i < 4; i++) {
-            solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
+            solver->addInflow(0.45, 0.2, 0.15, 0.03, 1.0, 0.0, 3.0);
             solver->update(timestep);
             time += timestep;
             fflush(stdout);

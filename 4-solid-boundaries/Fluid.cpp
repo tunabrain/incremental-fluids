@@ -42,10 +42,15 @@ template <typename T> int nsgn(T val) {
     return (val < T(0) ? -1 : 1);
 }
 
-/* Length of vector (x, y) */
 double length(double x, double y) {
     return sqrt(x*x + y*y);
 }
+
+double cubicPulse(double x) {
+    x = min(fabs(x), 1.0);
+    return 1.0 - x*x*(3.0 - 2.0*x);
+}
+
 
 /* Rotates point (x, y) by angle phi */
 void rotate(double &x, double &y, double phi) {
@@ -306,6 +311,7 @@ public:
         _body = new uint8_t[_w*_h];
         _mask = new uint8_t[_w*_h];
         
+        memset(_cell, 0, _w*_h*sizeof(uint8_t));
         memset(_src, 0, _w*_h*sizeof(double));
     }
     
@@ -417,13 +423,24 @@ public:
         int ix1 = (int)(x1/_hx - _ox);
         int iy1 = (int)(y1/_hx - _oy);
         
-        for (int y = max(iy0, 0); y < min(iy1, _h); y++)
-            for (int x = max(ix0, 0); x < min(ix1, _h); x++)
-                _src[x + y*_w] = v;
+        for (int y = max(iy0, 0); y < min(iy1, _h); y++) {
+            for (int x = max(ix0, 0); x < min(ix1, _h); x++) {
+                double l = length(
+                    (2.0*(x + 0.5)*_hx - (x0 + x1))/(x1 - x0),
+                    (2.0*(y + 0.5)*_hx - (y0 + y1))/(y1 - y0)
+                );
+                double vi = cubicPulse(l)*v;
+                if (fabs(_src[x + y*_w]) < fabs(vi))
+                    _src[x + y*_w] = vi;
+            }
+        }
     }
     
     /* Fill all solid related fields - that is, _cell, _body and _normalX/Y */
     void fillSolidFields(const vector<const SolidBody *> &bodies) {
+        if (bodies.empty())
+            return;
+        
         for (int iy = 0, idx = 0; iy < _h; iy++) {
             for (int ix = 0; ix < _w; ix++, idx++) {
                 double x = (ix + _ox)*_hx;
@@ -905,20 +922,20 @@ int main() {
     
     while (time < 8.0) {
         for (int i = 0; i < 4; i++) {
-            solver->addInflow(0.45, 0.2, 0.1, 0.01, 1.0, 0.0, 3.0);
+            solver->addInflow(0.45, 0.2, 0.15, 0.03, 1.0, 0.0, 3.0);
             solver->update(timestep);
             time += timestep;
             fflush(stdout);
-            
-            solver->toImage(image);
-            
-            char path[256];
-            sprintf(path, "Frame%05d.png", iterations++);
-            lodepng_encode32_file(path, image, sizeX, sizeY);
-            
-            for (unsigned i = 0; i < bodies.size(); i++)
-                bodies[i]->update(timestep);
         }
+        
+        solver->toImage(image);
+        
+        char path[256];
+        sprintf(path, "Frame%05d.png", iterations++);
+        lodepng_encode32_file(path, image, sizeX, sizeY);
+        
+        for (unsigned i = 0; i < bodies.size(); i++)
+            bodies[i]->update(timestep);
     }
 
     return 0;
