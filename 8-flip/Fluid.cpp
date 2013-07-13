@@ -767,7 +767,7 @@ class ParticleQuantities {
                         continue;
                     
                     for (unsigned t = 0; t < _quantities.size(); t++)
-                        _properties[t][j] = _quantities[t]->lerp(_posX[j], _posY[j]);
+                        _properties[t][j] = _quantities[t]->cerp(_posX[j], _posY[j]);
                     
                     _particleCount++;
                 }
@@ -843,7 +843,7 @@ public:
     void gridToParticles(double alpha) {
         for (unsigned t = 0; t < _quantities.size(); t++) {
             for (int i = 0; i < _particleCount; i++) {
-                _properties[t][i] *= alpha;
+                _properties[t][i] *= 1.0 - alpha;
                 _properties[t][i] += _quantities[t]->lerp(_posX[i], _posY[i]);
             }
         }
@@ -872,9 +872,9 @@ public:
 };
 
 class FluidSolver {
-    static const double _tAmb = 294.0;
-    static const double _g    = 9.81;
-    static const flipAlpha    = 1.0;
+    static const double _tAmb      = 294.0;
+    static const double _g         = 9.81;
+    static const double _flipAlpha = 0.001;
     
     FluidQuantity *_d;
     FluidQuantity *_t;
@@ -1247,7 +1247,7 @@ public:
         _qs->addQuantity(_t);
         _qs->addQuantity(_u);
         _qs->addQuantity(_v);
-        _qs->gridToParticles();
+        _qs->gridToParticles(1.0);
         
         _r = new double[_w*_h];
         _p = new double[_w*_h];
@@ -1280,7 +1280,7 @@ public:
         _u->copy();
         _v->copy();
         
-        addInflow(0.45, 0.2, 0.2, 0.05, 1.0, _tAmb, 0.0, 0.0);
+        addInflow(0.45, 0.8, 0.2, 0.05, 1.0, _tAmb + 200, 0.0, 0.0);
         
         memcpy(_r, _t->src(), _w*_h*sizeof(double));
         buildHeatDiffusionMatrix(timestep);
@@ -1306,17 +1306,17 @@ public:
         
         setBoundaryCondition();
         
-        _d->diff(alpha);
-        _t->diff(alpha);
-        _u->diff(alpha);
-        _v->diff(alpha);
+        _d->diff(_flipAlpha);
+        _t->diff(_flipAlpha);
+        _u->diff(_flipAlpha);
+        _v->diff(_flipAlpha);
         
-        _qs->gridToParticles(alpha);
+        _qs->gridToParticles(_flipAlpha);
 
-        _d->undiff(alpha);
-        _t->undiff(alpha);
-        _u->undiff(alpha);
-        _v->undiff(alpha);
+        _d->undiff(_flipAlpha);
+        _t->undiff(_flipAlpha);
+        _u->undiff(_flipAlpha);
+        _v->undiff(_flipAlpha);
         
         _qs->advect(timestep, *_u, *_v);
     }
@@ -1380,11 +1380,11 @@ int main() {
     const int sizeY = 128;
     
     const double densityAir = 0.1;
-    const double densitySoot = 0.5; /* You can make this smaller to get lighter smoke */
+    const double densitySoot = 0.1; /* You can make this smaller to get lighter smoke */
     const double diffusion = 0.01;
-    const double timestep = 0.0025;
+    const double timestep = 0.005;
     
-    const bool renderHeat = false; /* Set this to true to enable heat rendering */
+    const bool renderHeat = true; /* Set this to true to enable heat rendering */
     
     unsigned char *image = new unsigned char[sizeX*2*sizeY*4];
     
