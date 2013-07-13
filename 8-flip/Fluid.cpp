@@ -631,9 +631,6 @@ public:
     }
     
     void fromParticles(double *weight, int count, double *posX, double *posY, double *property) {
-        for (int i = 0; i < _w*_h; i++)
-            _cell[i] = CELL_FLUID;
-        
         memset(_src,   0, _w*_h*sizeof(double));
         memset(weight, 0, _w*_h*sizeof(double));
         
@@ -664,14 +661,14 @@ public:
         memcpy(_dst, _src, _w*_h*sizeof(double));
     }
     
-    void diff() {
+    void diff(double alpha) {
         for (int i = 0; i < _w*_h; i++)
-            _src[i] -= _dst[i];
+            _src[i] -= (1.0 - alpha)*_dst[i];
     }
     
-    void undiff() {
+    void undiff(double alpha) {
         for (int i = 0; i < _w*_h; i++)
-            _src[i] += _dst[i];
+            _src[i] += (1.0 - alpha)*_dst[i];
     }
 };
 
@@ -695,12 +692,25 @@ class ParticleQuantities {
     vector<double *> _properties;
     vector<FluidQuantity *> _quantities;
     
+    const vector<const SolidBody *> &_bodies;
+    
+    bool pointInBody(double x, double y) {
+        for (unsigned i = 0; i < _bodies.size(); i++)
+            if (_bodies[i]->distance(x*_hx, y*_hx) < 0.0)
+                return true;
+        
+        return false;
+    }
+    
     void initParticles() {
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++) {
                 for (int i = 0; i < _AvgPerCell; i++, idx++) {
                     _posX[idx] = x + frand();
                     _posY[idx] = y + frand();
+                    
+                    if (pointInBody(_posX[idx], _posY[idx]))
+                        idx--;
                 }
             }
         }
@@ -748,68 +758,43 @@ class ParticleQuantities {
                     if (_particleCount == _maxParticles)
                         return;
                     
-                    int j = _particleCount++;
+                    int j = _particleCount;
                     
                     _posX[j] = x + frand();
                     _posY[j] = y + frand();
                     
+                    if (pointInBody(_posX[idx], _posY[idx]))
+                        continue;
+                    
                     for (unsigned t = 0; t < _quantities.size(); t++)
                         _properties[t][j] = _quantities[t]->lerp(_posX[j], _posY[j]);
+                    
+                    _particleCount++;
                 }
             }
         }
     }
     
-public:
-    ParticleQuantities(int w, int h, double hx) : _w(w), _h(h), _hx(hx) {
-        _maxParticles = _w*_h*_MaxPerCell;
-        
-        _posX = new double[_maxParticles];
-        _posY = new double[_maxParticles];
-        
-        _weight = new double[(_w + 1)*(_h + 1)];
-        _counts = new int[_w*_h];
-        
-        initParticles();
-    }
-    
-    void addQuantity(FluidQuantity *q) {
-        double *property = new double[_maxParticles];
-        memset(property, 0, _maxParticles*sizeof(double));
-        
-        _quantities.push_back(q);
-        _properties.push_back(property);
-    }
-    
-    void gridToParticles() {
-        for (unsigned t = 0; t < _quantities.size(); t++)
-            for (int i = 0; i < _particleCount; i++)
-                _properties[t][i] += _quantities[t]->lerp(_posX[i], _posY[i]);
-    }
-    
-    void particlesToGrid() {
-        for (unsigned t = 0; t < _quantities.size(); t++)
-            _quantities[t]->fromParticles(_weight, _particleCount, _posX, _posY, _properties[t]);
-        
-        countParticles();
-        pruneParticles();
-        seedParticles();
-        
-        printf("Particle count: %d\n", _particleCount);
-    }
-    
-    /*void backProject(double &x, double &y, const vector<const SolidBody *> &bodies) {
-        int rx = min(max((int)x, 0), _w - 1);
-        int ry = min(max((int)y, 0), _h - 1);
-        
-        if (_cell[rx + ry*_w] != CELL_FLUID) {
-            x = (x - _ox)*_hx;
-            y = (y - _oy)*_hx;
-            bodies[_body[rx + ry*_w]]->closestSurfacePoint(x, y);
-            x = x/_hx + _ox;
-            y = y/_hx + _oy;
+    void backProject(double &x, double &y) {
+        double d = 1e30;
+        int closestBody = -1;
+        for (unsigned i = 0; i < _bodies.size(); i++) {
+            double id = _bodies[i]->distance(x*_hx, y*_hx);
+            
+            if (id < d) {
+                d = id;
+                closestBody = i;
+            }
         }
-    }*/
+        
+        if (d < 0.0) {
+            x *= _hx;
+            y *= _hx;
+            _bodies[closestBody]->closestSurfacePoint(x, y);
+            x /= _hx;
+            y /= _hx;
+        }
+    }
     
     void rungeKutta3(double &x, double &y, double timestep, const FluidQuantity &u, const FluidQuantity &v) const {
         double firstU = u.lerp(x, y)/_hx;
@@ -831,9 +816,54 @@ public:
         y += timestep*((2.0/9.0)*firstV + (3.0/9.0)*midV + (4.0/9.0)*lastV);
     }
     
+public:
+    ParticleQuantities(int w, int h, double hx,
+            const vector<const SolidBody *> &bodies) :
+            _w(w), _h(h), _hx(hx), _bodies(bodies) {
+        
+        _maxParticles = _w*_h*_MaxPerCell;
+        
+        _posX = new double[_maxParticles];
+        _posY = new double[_maxParticles];
+        
+        _weight = new double[(_w + 1)*(_h + 1)];
+        _counts = new int[_w*_h];
+        
+        initParticles();
+    }
+    
+    void addQuantity(FluidQuantity *q) {
+        double *property = new double[_maxParticles];
+        memset(property, 0, _maxParticles*sizeof(double));
+        
+        _quantities.push_back(q);
+        _properties.push_back(property);
+    }
+    
+    void gridToParticles(double alpha) {
+        for (unsigned t = 0; t < _quantities.size(); t++) {
+            for (int i = 0; i < _particleCount; i++) {
+                _properties[t][i] *= alpha;
+                _properties[t][i] += _quantities[t]->lerp(_posX[i], _posY[i]);
+            }
+        }
+    }
+    
+    void particlesToGrid() {
+        for (unsigned t = 0; t < _quantities.size(); t++)
+            _quantities[t]->fromParticles(_weight, _particleCount, _posX, _posY, _properties[t]);
+        
+        countParticles();
+        pruneParticles();
+        seedParticles();
+        
+        printf("Particle count: %d\n", _particleCount);
+    }
+    
     void advect(double timestep, const FluidQuantity &u, const FluidQuantity &v) {
         for (int i = 0; i < _particleCount; i++) {
             rungeKutta3(_posX[i], _posY[i], timestep, u, v);
+            backProject(_posX[i], _posY[i]);
             
             _posX[i] = max(min(_posX[i], _w - 0.001), 0.0);
             _posY[i] = max(min(_posY[i], _h - 0.001), 0.0);
@@ -844,6 +874,7 @@ public:
 class FluidSolver {
     static const double _tAmb = 294.0;
     static const double _g    = 9.81;
+    static const flipAlpha    = 1.0;
     
     FluidQuantity *_d;
     FluidQuantity *_t;
@@ -1211,7 +1242,7 @@ public:
         for (int i = 0; i < _w*_h; i++)
             _t->src()[i] = _tAmb;
                 
-        _qs = new ParticleQuantities(_w, _h, _hx);
+        _qs = new ParticleQuantities(_w, _h, _hx, _bodies);
         _qs->addQuantity(_d);
         _qs->addQuantity(_t);
         _qs->addQuantity(_u);
@@ -1249,7 +1280,7 @@ public:
         _u->copy();
         _v->copy();
         
-        addInflow(0.45, 0.2, 0.1, 0.05, 1.0, _tAmb, 0.0, 0.0);
+        addInflow(0.45, 0.2, 0.2, 0.05, 1.0, _tAmb, 0.0, 0.0);
         
         memcpy(_r, _t->src(), _w*_h*sizeof(double));
         buildHeatDiffusionMatrix(timestep);
@@ -1275,17 +1306,17 @@ public:
         
         setBoundaryCondition();
         
-        _d->diff();
-        _t->diff();
-        _u->diff();
-        _v->diff();
+        _d->diff(alpha);
+        _t->diff(alpha);
+        _u->diff(alpha);
+        _v->diff(alpha);
         
-        _qs->gridToParticles();
+        _qs->gridToParticles(alpha);
 
-        _d->undiff();
-        _t->undiff();
-        _u->undiff();
-        _v->undiff();
+        _d->undiff(alpha);
+        _t->undiff(alpha);
+        _u->undiff(alpha);
+        _v->undiff(alpha);
         
         _qs->advect(timestep, *_u, *_v);
     }
@@ -1349,20 +1380,20 @@ int main() {
     const int sizeY = 128;
     
     const double densityAir = 0.1;
-    const double densitySoot = 1.0; /* You can make this smaller to get lighter smoke */
+    const double densitySoot = 0.5; /* You can make this smaller to get lighter smoke */
     const double diffusion = 0.01;
-    const double timestep = 0.005;
+    const double timestep = 0.0025;
     
     const bool renderHeat = false; /* Set this to true to enable heat rendering */
     
     unsigned char *image = new unsigned char[sizeX*2*sizeY*4];
     
     vector<SolidBody *> bodies;
-    //bodies.push_back(new SolidBox(0.5, 0.6, 0.7, 0.1, M_PI*0.25, 0.0, 0.0, 0.0));
+    bodies.push_back(new SolidBox(0.5, 0.6, 0.7, 0.1, M_PI*0.25*0, 0.0, 0.0, 0.0));
     
     vector<const SolidBody *> cBodies;
-    /*for (unsigned i = 0; i < bodies.size(); i++)
-        cBodies.push_back(bodies[i]);*/
+    for (unsigned i = 0; i < bodies.size(); i++)
+        cBodies.push_back(bodies[i]);
 
     FluidSolver *solver = new FluidSolver(sizeX, sizeY, densityAir, densitySoot, diffusion, cBodies);
 
