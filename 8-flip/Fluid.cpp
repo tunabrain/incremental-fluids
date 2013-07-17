@@ -106,12 +106,14 @@ double occupancy(double d11, double d12, double d21, double d22) {
 
 	case 0xF: return 1.0;
 	}
+    
+    return 0.0;
 }
 
 enum CellType {
     CELL_FLUID,
     CELL_SOLID,
-    CELL_EMPTY,
+    CELL_EMPTY
 };
 
 class SolidBody {
@@ -916,11 +918,6 @@ public:
 };
 
 class FluidSolver {
-    static const double _tAmb      = 294.0;
-    static const double _g         = 9.81;
-    /* Tiny blending factor for FLIP/PIC to avoid noise */
-    static const double _flipAlpha = 0.001;
-    
     FluidQuantity *_d;
     FluidQuantity *_t;
     FluidQuantity *_u;
@@ -929,8 +926,6 @@ class FluidSolver {
     
     double *_uDensity;
     double *_vDensity;
-    
-    const vector<const SolidBody *> &_bodies;
     
     int _w;
     int _h;
@@ -949,6 +944,13 @@ class FluidSolver {
     double *_aDiag;
     double *_aPlusX;
     double *_aPlusY;
+    
+    double _tAmb;
+    double _g;
+    /* Tiny blending factor for FLIP/PIC to avoid noise */
+    double _flipAlpha;
+    
+    const vector<const SolidBody *> &_bodies;
     
     void buildRhs() {
         double scale = 1.0/_hx;
@@ -1136,7 +1138,7 @@ class FluidSolver {
         return result;
     }
     
-    double matrixVectorProduct(double *dst, double *b) {
+    void matrixVectorProduct(double *dst, double *b) {
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++, idx++) {
                 double t = _aDiag[idx]*b[idx];
@@ -1155,7 +1157,7 @@ class FluidSolver {
         }
     }
     
-    double scaledAdd(double *dst, double *a, double *b, double s) {
+    void scaledAdd(double *dst, double *a, double *b, double s) {
         const uint8_t *cell = _d->cell();
         
         for (int i = 0; i < _w*_h; i++)
@@ -1266,6 +1268,10 @@ public:
             const vector<const SolidBody *> &bodies) : _w(w), _h(h),
             _densityAir(rhoAir), _densitySoot(rhoSoot), _diffusion(diffusion),
             _bodies(bodies) {
+                
+        _tAmb      = 294.0;
+        _g         = 9.81;
+        _flipAlpha = 0.001;
                 
         _hx = 1.0/min(w, h);
         

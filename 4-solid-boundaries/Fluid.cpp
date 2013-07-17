@@ -62,7 +62,7 @@ void rotate(double &x, double &y, double phi) {
 /* Enum to differentiate fluid and solid cells */
 enum CellType {
     CELL_FLUID,
-    CELL_SOLID,
+    CELL_SOLID
 };
 
 /* The base class representing solid bodies in the simulation.
@@ -583,9 +583,6 @@ class FluidSolver {
     FluidQuantity *_u;
     FluidQuantity *_v;
     
-    /* List of solid bodies to consider in the simulation */
-    const vector<const SolidBody *> &_bodies;
-    
     int _w;
     int _h;
     
@@ -602,10 +599,12 @@ class FluidSolver {
     double *_aPlusX;
     double *_aPlusY;
     
+    /* List of solid bodies to consider in the simulation */
+    const vector<const SolidBody *> &_bodies;
+    
     void buildRhs() {
         double scale = 1.0/_hx;
         const uint8_t *cell = _d->cell();
-        const uint8_t *body = _d->body();
         
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++, idx++) {
@@ -719,7 +718,7 @@ class FluidSolver {
         return result;
     }
     
-    double matrixVectorProduct(double *dst, double *b) {
+    void matrixVectorProduct(double *dst, double *b) {
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++, idx++) {
                 double t = _aDiag[idx]*b[idx];
@@ -738,7 +737,7 @@ class FluidSolver {
         }
     }
     
-    double scaledAdd(double *dst, double *a, double *b, double s) {
+    void scaledAdd(double *dst, double *a, double *b, double s) {
         for (int i = 0; i < _w*_h; i++)
             dst[i] = a[i] + b[i]*s;
     }

@@ -1,5 +1,6 @@
 CXX = g++
-CFLAGS = -O2
+WARNINGS = -Wall -pedantic -Wformat -Wcast-align
+CFLAGS = -O2 $(WARNINGS)
 
 LODEPNGSRC = lodepng/lodepng.cpp
 LODEPNGOBJ = lodepng/lodepng.o

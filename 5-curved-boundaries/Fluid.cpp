@@ -124,11 +124,13 @@ double occupancy(double d11, double d12, double d21, double d22) {
     /* All inside */
 	case 0xF: return 1.0;
 	}
+    
+    return 0.0;
 }
 
 enum CellType {
     CELL_FLUID,
-    CELL_SOLID,
+    CELL_SOLID
 };
 
 class SolidBody {
@@ -617,8 +619,6 @@ class FluidSolver {
     FluidQuantity *_u;
     FluidQuantity *_v;
     
-    const vector<const SolidBody *> &_bodies;
-    
     int _w;
     int _h;
     
@@ -634,6 +634,8 @@ class FluidSolver {
     double *_aDiag;
     double *_aPlusX;
     double *_aPlusY;
+    
+    const vector<const SolidBody *> &_bodies;
     
     /* We now modify the right hand side to "blend" between solid and fluid
      * velocity based on the cell volume occupied by fluid.
@@ -773,7 +775,7 @@ class FluidSolver {
         return result;
     }
     
-    double matrixVectorProduct(double *dst, double *b) {
+    void matrixVectorProduct(double *dst, double *b) {
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++, idx++) {
                 double t = _aDiag[idx]*b[idx];
@@ -792,7 +794,7 @@ class FluidSolver {
         }
     }
     
-    double scaledAdd(double *dst, double *a, double *b, double s) {
+    void scaledAdd(double *dst, double *a, double *b, double s) {
         for (int i = 0; i < _w*_h; i++)
             dst[i] = a[i] + b[i]*s;
     }

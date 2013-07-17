@@ -95,11 +95,13 @@ double occupancy(double d11, double d12, double d21, double d22) {
 
 	case 0xF: return 1.0;
 	}
+    
+    return 0.0;
 }
 
 enum CellType {
     CELL_FLUID,
-    CELL_SOLID,
+    CELL_SOLID
 };
 
 class SolidBody {
@@ -572,17 +574,10 @@ public:
 };
 
 class FluidSolver {
-    /* Ambient temperature (here room temperature), in Kelvin */
-    static const double _tAmb = 294.0;
-    /* Gravity */
-    static const double _g    = 9.81;
-    
     FluidQuantity *_d;
     FluidQuantity *_t; /* Temperature */
     FluidQuantity *_u;
     FluidQuantity *_v;
-    
-    const vector<const SolidBody *> &_bodies;
     
     int _w;
     int _h;
@@ -601,6 +596,13 @@ class FluidSolver {
     double *_aDiag;
     double *_aPlusX;
     double *_aPlusY;
+    
+    /* Ambient temperature (here room temperature), in Kelvin */
+    double _tAmb;
+    /* Gravity */
+    double _g;
+    
+    const vector<const SolidBody *> &_bodies;
     
     void buildRhs() {
         double scale = 1.0/_hx;
@@ -775,7 +777,7 @@ class FluidSolver {
         return result;
     }
     
-    double matrixVectorProduct(double *dst, double *b) {
+    void matrixVectorProduct(double *dst, double *b) {
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++, idx++) {
                 double t = _aDiag[idx]*b[idx];
@@ -794,7 +796,7 @@ class FluidSolver {
         }
     }
     
-    double scaledAdd(double *dst, double *a, double *b, double s) {
+    void scaledAdd(double *dst, double *a, double *b, double s) {
         const uint8_t *cell = _d->cell();
         
         for (int i = 0; i < _w*_h; i++)
@@ -909,6 +911,9 @@ public:
             const vector<const SolidBody *> &bodies) : _w(w), _h(h),
             _densityAir(rhoAir), _densitySoot(rhoSoot), _diffusion(diffusion),
             _bodies(bodies) {
+                
+        _tAmb = 294.0;
+        _g    = 9.81;
                 
         _hx = 1.0/min(w, h);
         

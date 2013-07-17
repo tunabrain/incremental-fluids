@@ -312,7 +312,7 @@ class FluidSolver {
     }
     
     /* Multiplies internal pressure matrix with vector `b' and stores the result in `dst' */
-    double matrixVectorProduct(double *dst, double *b) {
+    void matrixVectorProduct(double *dst, double *b) {
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++, idx++) {
                 double t = _aDiag[idx]*b[idx];
@@ -332,7 +332,7 @@ class FluidSolver {
     }
     
     /* Computes `dst' = `a' + `b'*`s' */
-    double scaledAdd(double *dst, double *a, double *b, double s) {
+    void scaledAdd(double *dst, double *a, double *b, double s) {
         for (int i = 0; i < _w*_h; i++)
             dst[i] = a[i] + b[i]*s;
     }
