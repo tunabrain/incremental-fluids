@@ -32,6 +32,7 @@ freely, subject to the following restrictions:
 
 using namespace std;
 
+/* Bit twiddling floating point rand function. Returns a value in [0, 1) */
 float frand() {
 	static uint32_t seed = 0xBA5EBA11;
 	seed = (seed*1103515245 + 12345) & 0x7FFFFFFF;
@@ -265,7 +266,7 @@ public:
 
 class FluidQuantity {
     double *_src;
-    double *_dst;
+    double *_old; /* Contains old quantities at beginning of iteration */
     
     double *_phi;
     double *_volume;
@@ -285,36 +286,23 @@ class FluidQuantity {
         return a*(1.0 - x) + b*x;
     }
     
-    double cerp(double a, double b, double c, double d, double x) const {
-        double xsq = x*x;
-        double xcu = xsq*x;
-        
-        double minV = min(a, min(b, min(c, d)));
-        double maxV = max(a, max(b, max(c, d)));
-
-        double t =
-            a*(0.0 - 0.5*x + 1.0*xsq - 0.5*xcu) +
-            b*(1.0 + 0.0*x - 2.5*xsq + 1.5*xcu) +
-            c*(0.0 + 0.5*x + 2.0*xsq - 1.5*xcu) +
-            d*(0.0 + 0.0*x - 0.5*xsq + 0.5*xcu);
-        
-        return min(max(t, minV), maxV);
-    }
-    
-    void addSample(double *weight, double property, double x, double y, int ix, int iy) {
+    /* Adds contribution `value' of sample at (x, y) to grid cell at (ix, iy)
+     * using a hat filter.
+     */
+    void addSample(double *weight, double value, double x, double y, int ix, int iy) {
         if (ix < 0 || iy < 0 || ix >= _w || iy >= _h)
             return;
         
         double k = (1.0 - fabs(ix - x))*(1.0 - fabs(iy - y));
         weight[ix + iy*_w] += k;
-        _src  [ix + iy*_w] += k*property;
+        _src  [ix + iy*_w] += k*value;
     }
     
 public:
     FluidQuantity(int w, int h, double ox, double oy, double hx)
             : _w(w), _h(h), _ox(ox), _oy(oy), _hx(hx) {
         _src = new double[_w*_h];
-        _dst = new double[_w*_h];
+        _old = new double[_w*_h];
         
         _phi = new double[(_w + 1)*(_h + 1)];
         _volume  = new double[_w*_h];
@@ -335,7 +323,7 @@ public:
     
     ~FluidQuantity() {
         delete[] _src;
-        delete[] _dst;
+        delete[] _old;
     }
     
     double *src() {
@@ -370,6 +358,22 @@ public:
         return _src[x + y*_w];
     }
     
+    void copy() {
+        memcpy(_old, _src, _w*_h*sizeof(double));
+    }
+    
+    /* Computes the change in quantity during the last update */
+    void diff(double alpha) {
+        for (int i = 0; i < _w*_h; i++)
+            _src[i] -= (1.0 - alpha)*_old[i];
+    }
+    
+    /* Reverses the previous transformation - saves memory */
+    void undiff(double alpha) {
+        for (int i = 0; i < _w*_h; i++)
+            _src[i] += (1.0 - alpha)*_old[i];
+    }
+    
     double lerp(double x, double y) const {
         x = min(max(x - _ox, 0.0), _w - 1.001);
         y = min(max(y - _oy, 0.0), _h - 1.001);
@@ -382,26 +386,6 @@ public:
         double x01 = at(ix + 0, iy + 1), x11 = at(ix + 1, iy + 1);
         
         return lerp(lerp(x00, x10, x), lerp(x01, x11, x), y);
-    }
-    
-    double cerp(double x, double y) const {
-        x = min(max(x - _ox, 0.0), _w - 1.001);
-        y = min(max(y - _oy, 0.0), _h - 1.001);
-        int ix = (int)x;
-        int iy = (int)y;
-        
-        x -= ix;
-        y -= iy;
-        
-        int x0 = max(ix - 1, 0), x1 = ix, x2 = ix + 1, x3 = min(ix + 2, _w - 1);
-        int y0 = max(iy - 1, 0), y1 = iy, y2 = iy + 1, y3 = min(iy + 2, _h - 1);
-        
-        double q0 = cerp(at(x0, y0), at(x1, y0), at(x2, y0), at(x3, y0), x);
-        double q1 = cerp(at(x0, y1), at(x1, y1), at(x2, y1), at(x3, y1), x);
-        double q2 = cerp(at(x0, y2), at(x1, y2), at(x2, y2), at(x3, y2), x);
-        double q3 = cerp(at(x0, y3), at(x1, y3), at(x2, y3), at(x3, y3), x);
-        
-        return cerp(q0, q1, q2, q3, y);
     }
     
     void addInflow(double x0, double y0, double x1, double y1, double v) {
@@ -472,7 +456,16 @@ public:
         }
     }
     
+    /* The extrapolation routine is now augmented to also fill in values for
+     * cells that ended up with no particles in them. These are marked with
+     * CELL_EMPTY. Empty cells are computed as the average value of all
+     * available neighbours, and can therefore be computed as soon as at
+     * least one neighbouring cell is available.
+     */
     void fillSolidMask() {
+        /* Make sure border is not touched by extrapolation - will be
+         * handled separately.
+         */
         for (int x = 0; x < _w; x++)
             _mask[x] = _mask[x + (_h - 1)*_w] = 0xFF;
         for (int y = 0; y < _h; y++)
@@ -493,6 +486,9 @@ public:
                     if (ny != 0.0 && _cell[idx + sgn(ny)*_w] != CELL_FLUID)
                         _mask[idx] |= 2;
                 } else if (_cell[idx] == CELL_EMPTY) {
+                    /* Empty cells with no available neighbours need to be
+                     * processed later.
+                     */
                     _mask[idx] =
                         _cell[idx -  1] != CELL_FLUID &&
                         _cell[idx +  1] != CELL_FLUID &&
@@ -513,6 +509,9 @@ public:
         return (fabs(nx)*srcX + fabs(ny)*srcY)/(fabs(nx) + fabs(ny));
     }
     
+    /* Computes the extrapolated value as the average of all available
+     * neighbouring cells.
+     */
     double extrapolateAverage(int idx) {
         double value = 0.0;
         int count = 0;
@@ -540,6 +539,9 @@ public:
         }
     }
     
+    /* At least one free neighbour cell is enough to add this cell to the queue
+     * of ready cells.
+     */
     void freeEmptyNeighbour(int idx, stack<int> &border) {
         if (_cell[idx] == CELL_EMPTY) {
             if (_mask[idx] == 1) {
@@ -549,6 +551,9 @@ public:
         }
     }
     
+    /* For empty cells on the border of the simulation domain, we simply copy
+     * the values of the adjacent cells.
+     */
     void extrapolateEmptyBorders() {
         for (int x = 1; x < _w - 1; x++) {
             int idxT = x;
@@ -575,6 +580,7 @@ public:
         int idxBL = (_h - 1)*_w;
         int idxBR = _h*_w - 1;
         
+        /* Corner cells average the values of the two adjacent border cells */
         if (_cell[idxTL] == CELL_EMPTY)
             _src[idxTL] = 0.5*(_src[idxTL + 1] + _src[idxTL + _w]);
         if (_cell[idxTR] == CELL_EMPTY)
@@ -608,7 +614,7 @@ public:
 
             if (_cell[idx] == CELL_EMPTY) {
                 _src[idx] = extrapolateAverage(idx);
-                _cell[idx] = CELL_FLUID;
+                _cell[idx] = CELL_FLUID; /* Mark extrapolated empty cells as fluid */
             } else
                 _src[idx] = extrapolateNormal(idx);
 
@@ -621,6 +627,7 @@ public:
             if (_normalY[idx + _w] < 0.0)
                 freeSolidNeighbour(idx + _w, border, 2);
             
+            /* Notify adjacent empty cells */
             freeEmptyNeighbour(idx -  1, border);
             freeEmptyNeighbour(idx +  1, border);
             freeEmptyNeighbour(idx - _w, border);
@@ -630,6 +637,16 @@ public:
         extrapolateEmptyBorders();
     }
     
+    /* Transfers particle values onto grid using a linear filter.
+     *
+     * In a first step, particle values and filter weights are accumulated on
+     * the grid by looping over all particles and adding the particle contribution
+     * to the four closest grid cells.
+     *
+     * In a second step, the actual grid values are obtained by dividing by the
+     * filter weights. Cells with weight zero are cells which do not contain any
+     * particles and are subsequently marked as empty for extrapolation.
+     */
     void fromParticles(double *weight, int count, double *posX, double *posY, double *property) {
         memset(_src,   0, _w*_h*sizeof(double));
         memset(weight, 0, _w*_h*sizeof(double));
@@ -656,44 +673,43 @@ public:
                 _cell[i] = CELL_EMPTY;
         }
     }
-    
-    void copy() {
-        memcpy(_dst, _src, _w*_h*sizeof(double));
-    }
-    
-    void diff(double alpha) {
-        for (int i = 0; i < _w*_h; i++)
-            _src[i] -= (1.0 - alpha)*_dst[i];
-    }
-    
-    void undiff(double alpha) {
-        for (int i = 0; i < _w*_h; i++)
-            _src[i] += (1.0 - alpha)*_dst[i];
-    }
 };
 
+/* Main class processing fluid particles */
 class ParticleQuantities {
+    /* Maximum allowed number of particles per cell */
     static const int _MaxPerCell = 12;
+    /* Minimum allowed number of particles per cell */
     static const int _MinPerCell = 3;
+    /* Initial number of particles per cell */
     static const int _AvgPerCell = 4;
     
+    /* Number of particles currently active */
     int _particleCount;
+    /* Maximum number of particles the simulation can handle */
     int _maxParticles;
     
+    /* The usual culprits */
     int _w;
     int _h;
     double _hx;
+    const vector<const SolidBody *> &_bodies;
     
+    /* Filter weights (auxiliary array provided to fluid quantities) */
     double *_weight;
+    /* Number of particles per cell */
     int *_counts;
 
+    /* Particle positions */
     double *_posX;
     double *_posY;
+    /* Particle 'properties', that is, value for each fluid quantity
+     * (velocities, density etc.)
+     */
     vector<double *> _properties;
     vector<FluidQuantity *> _quantities;
     
-    const vector<const SolidBody *> &_bodies;
-    
+    /* Helper function returning true if a position is inside a solid body */
     bool pointInBody(double x, double y) {
         for (unsigned i = 0; i < _bodies.size(); i++)
             if (_bodies[i]->distance(x*_hx, y*_hx) < 0.0)
@@ -702,22 +718,26 @@ class ParticleQuantities {
         return false;
     }
     
+    /* Initializes particle positions on randomly jittered grid locations */
     void initParticles() {
-        for (int y = 0, idx = 0; y < _h; y++) {
+        int idx = 0;
+        for (int y = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++) {
                 for (int i = 0; i < _AvgPerCell; i++, idx++) {
                     _posX[idx] = x + frand();
                     _posY[idx] = y + frand();
                     
+                    /* Discard particles landing inside solid bodies */
                     if (pointInBody(_posX[idx], _posY[idx]))
                         idx--;
                 }
             }
         }
         
-        _particleCount = _w*_h*_AvgPerCell;
+        _particleCount = idx;
     }
     
+    /* Counts the number of particles per cell */
     void countParticles() {
         memset(_counts, 0, _w*_h*sizeof(int));
         for (int i = 0; i < _particleCount; i++) {
@@ -729,6 +749,7 @@ class ParticleQuantities {
         }
     }
     
+    /* Decimates particles in crowded cells */
     void pruneParticles() {
         for (int i = 0; i < _particleCount; i++) {
             int ix = (int)_posX[i];
@@ -751,6 +772,7 @@ class ParticleQuantities {
         }
     }
     
+    /* Adds new particles in cells with dangerously little particles */
     void seedParticles() {
         for (int y = 0, idx = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++, idx++) {
@@ -763,11 +785,13 @@ class ParticleQuantities {
                     _posX[j] = x + frand();
                     _posY[j] = y + frand();
                     
+                    /* Reject particle if it lands inside a solid body */
                     if (pointInBody(_posX[idx], _posY[idx]))
                         continue;
                     
+                    /* Get current grid values */
                     for (unsigned t = 0; t < _quantities.size(); t++)
-                        _properties[t][j] = _quantities[t]->cerp(_posX[j], _posY[j]);
+                        _properties[t][j] = _quantities[t]->lerp(_posX[j], _posY[j]);
                     
                     _particleCount++;
                 }
@@ -775,6 +799,7 @@ class ParticleQuantities {
         }
     }
     
+    /* Pushes particle back into the fluid if they land inside solid bodies */
     void backProject(double &x, double &y) {
         double d = 1e30;
         int closestBody = -1;
@@ -787,15 +812,22 @@ class ParticleQuantities {
             }
         }
         
-        if (d < 0.0) {
+        if (d < -1.0) {
             x *= _hx;
             y *= _hx;
             _bodies[closestBody]->closestSurfacePoint(x, y);
+            double nx, ny;
+            _bodies[closestBody]->distanceNormal(nx, ny, x, y);
+            x -= nx*_hx;
+            y -= ny*_hx;
             x /= _hx;
             y /= _hx;
         }
     }
     
+    /* The same Runge Kutta interpolation routine as before - only now forward
+     * in time instead of backwards.
+     */
     void rungeKutta3(double &x, double &y, double timestep, const FluidQuantity &u, const FluidQuantity &v) const {
         double firstU = u.lerp(x, y)/_hx;
         double firstV = v.lerp(x, y)/_hx;
@@ -832,6 +864,7 @@ public:
         initParticles();
     }
     
+    /* Adds a new quantity to be carried by the particles */
     void addQuantity(FluidQuantity *q) {
         double *property = new double[_maxParticles];
         memset(property, 0, _maxParticles*sizeof(double));
@@ -840,6 +873,10 @@ public:
         _properties.push_back(property);
     }
     
+    /* Interpolates the change in quantity back onto the particles.
+     * Mixes in a little bit of the pure Particle-in-cell update using the
+     * parameter alpha.
+     */
     void gridToParticles(double alpha) {
         for (unsigned t = 0; t < _quantities.size(); t++) {
             for (int i = 0; i < _particleCount; i++) {
@@ -849,9 +886,14 @@ public:
         }
     }
     
+    /* Interpolates particle quantities onto the grid, extrapolates them and
+     * spawns/prunes particles where necessary.
+     */
     void particlesToGrid() {
-        for (unsigned t = 0; t < _quantities.size(); t++)
+        for (unsigned t = 0; t < _quantities.size(); t++) {
             _quantities[t]->fromParticles(_weight, _particleCount, _posX, _posY, _properties[t]);
+            _quantities[t]->extrapolate();
+        }
         
         countParticles();
         pruneParticles();
@@ -860,6 +902,8 @@ public:
         printf("Particle count: %d\n", _particleCount);
     }
     
+    /* Advects particle in velocity field and clamps resulting positions to
+     * the fluid domain */
     void advect(double timestep, const FluidQuantity &u, const FluidQuantity &v) {
         for (int i = 0; i < _particleCount; i++) {
             rungeKutta3(_posX[i], _posY[i], timestep, u, v);
@@ -874,6 +918,7 @@ public:
 class FluidSolver {
     static const double _tAmb      = 294.0;
     static const double _g         = 9.81;
+    /* Tiny blending factor for FLIP/PIC to avoid noise */
     static const double _flipAlpha = 0.001;
     
     FluidQuantity *_d;
@@ -936,9 +981,6 @@ class FluidSolver {
         }
     }
     
-    /* Computes densities at the staggered grid locations as a function of
-     * temperature and smoke concentration.
-     */
     void computeDensities() {
         double alpha = (_densitySoot - _densityAir)/_densityAir;
         
@@ -947,9 +989,8 @@ class FluidSolver {
         
         for (int y = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++) {
-                //double density = _densityAir*(1.0 + alpha*_d->at(x, y) - (_t->at(x, y) - _tAmb)/_tAmb);
                 double density = _densityAir*_tAmb/_t->at(x, y)*(1.0 + alpha*_d->at(x, y));
-                density = max(density, 0.05*_densityAir); /* Clamp dangerously low densities */
+                density = max(density, 0.05*_densityAir);
                 
                 _uDensity[_u->idx(x, y)]     += 0.5*density;
                 _vDensity[_v->idx(x, y)]     += 0.5*density;
@@ -958,10 +999,7 @@ class FluidSolver {
             }
         }
     }
-    
-    /* Instead of constant density per cell, the entries must now be modified
-     * to account for variable density at individual grid cells.
-     */
+
     void buildPressureMatrix(double timestep) {
         double scale = timestep/(_hx*_hx);
         const uint8_t *cell = _d->cell();
@@ -1170,9 +1208,6 @@ class FluidSolver {
         printf("Exceeded budget of %d iterations, maximum error was %f\n", limit, maxError);
     }
     
-    /* Similar to the pressure matrix, we cannot assume constant density per
-     * cell here either and must modify the equations accordingly.
-     */
     void applyPressure(double timestep) {
         double scale = timestep/_hx;
         const uint8_t *cell = _d->cell();
@@ -1247,6 +1282,7 @@ public:
         _qs->addQuantity(_t);
         _qs->addQuantity(_u);
         _qs->addQuantity(_v);
+        /* Interpolate initial quantity distribution onto particles */
         _qs->gridToParticles(1.0);
         
         _r = new double[_w*_h];
@@ -1268,19 +1304,19 @@ public:
         _u->fillSolidFields(_bodies);
         _v->fillSolidFields(_bodies);
         
+        /* Interpolate particle quantities to grid */
         _qs->particlesToGrid();
         
-        _d->extrapolate();
-        _t->extrapolate();
-        _u->extrapolate();
-        _v->extrapolate();
-        
+        /* Set current values as the old/pre-update values */
         _d->copy();
         _t->copy();
         _u->copy();
         _v->copy();
         
-        addInflow(0.45, 0.8, 0.2, 0.05, 1.0, _tAmb + 200, 0.0, 0.0);
+        /* Unfortunately, we have to move inflows out of the mainloop into here
+         * - all changes need to happen between copy and diff to have any effect
+         */
+        addInflow(0.45, 0.2, 0.2, 0.05, 1.0, _tAmb, 0.0, 0.0);
         
         memcpy(_r, _t->src(), _w*_h*sizeof(double));
         buildHeatDiffusionMatrix(timestep);
@@ -1306,18 +1342,24 @@ public:
         
         setBoundaryCondition();
         
+        /* Compute change in quantities */
         _d->diff(_flipAlpha);
         _t->diff(_flipAlpha);
         _u->diff(_flipAlpha);
         _v->diff(_flipAlpha);
         
+        /* Interpolate change onto particles */
         _qs->gridToParticles(_flipAlpha);
 
+        /* Reverse the change computation to get the post-update values back
+         * (for rendering/advection).
+         */
         _d->undiff(_flipAlpha);
         _t->undiff(_flipAlpha);
         _u->undiff(_flipAlpha);
         _v->undiff(_flipAlpha);
         
+        /* Advect particles in velocity field */
         _qs->advect(timestep, *_u, *_v);
     }
     
@@ -1357,7 +1399,8 @@ public:
                 }
                 
                 if (renderHeat) {
-                    double t = (_t->at(x, y) - _tAmb)/700.0;
+                    double t = fabs(_t->at(x, y) - _tAmb)/70.0;
+                    
                     t = min(max(t, 0.0), 1.0);
                     
                     double r = 1.0 + volume*(min(t*4.0, 1.0) - 1.0);
@@ -1380,16 +1423,16 @@ int main() {
     const int sizeY = 128;
     
     const double densityAir = 0.1;
-    const double densitySoot = 0.1; /* You can make this smaller to get lighter smoke */
+    const double densitySoot = 0.25; /* You can make this smaller to get lighter smoke */
     const double diffusion = 0.01;
-    const double timestep = 0.005;
+    const double timestep = 0.0025;
     
-    const bool renderHeat = true; /* Set this to true to enable heat rendering */
+    const bool renderHeat = false; /* Set this to true to enable heat rendering */
     
     unsigned char *image = new unsigned char[sizeX*2*sizeY*4];
     
     vector<SolidBody *> bodies;
-    bodies.push_back(new SolidBox(0.5, 0.6, 0.7, 0.1, M_PI*0.25*0, 0.0, 0.0, 0.0));
+    bodies.push_back(new SolidBox(0.5, 0.6, 0.7, 0.1, M_PI*0.25, 0.0, 0.0, 0.0));
     
     vector<const SolidBody *> cBodies;
     for (unsigned i = 0; i < bodies.size(); i++)
@@ -1402,7 +1445,6 @@ int main() {
     
     while (time < 8.0) {
         for (int i = 0; i < 4; i++) {
-            //solver->addInflow(0.45, 0.2, 0.1, 0.05, 1.0, solver->ambientT(), 0.0, 0.0);
             solver->update(timestep);
             time += timestep;
             fflush(stdout);
