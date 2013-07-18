@@ -19,7 +19,7 @@ To improve interpolation, we will replace the linear interpolation with a cubic 
 
 To improve interpolation, forward Euler is replaced with a third-order Runge-Kutta method. There is actually a large family of Runge-Kutta integration methods[3] of which the implemented one is only one of many members, but we won't delve too much into that. Again, it greatly improves integration accuracy without being overly complex.
 
-One of the things that should be noted is that the Catmull-Rom spline can lead to oscillations. One of the main conditions of the method is that the function which is being interpolated is smooth. When this is not the case, such as at borders of the fluid domain or near sharp details in the fluid flow, the interpolation spline can over- or undershoot and lead to curious stripes in the fluid. For now, this is something we have to deal with, but we will be able to improve this situation once we introduce FLIP. 
+One of the things that should be noted is that the Catmull-Rom spline can lead to oscillations. One of the main conditions of the method is that the function which is being interpolated is smooth. When this is not the case, such as at borders of the fluid domain or near sharp details in the fluid flow, the interpolation spline can over- or undershoot and lead to curious stripes in the fluid. For now, this is something we have to deal with, but we will be able to improve this situation once we introduce FLIP. One of the consequences of this is that we will have to slightly tweak our inflows - instead of setting fluid quantities to a specific value inside a rectangle, we place smooth "blobs" instead to ensure the fluid quantities near the inflow stay smooth to avoid oscillation. 
 
 ### References and recommended reading:
 
