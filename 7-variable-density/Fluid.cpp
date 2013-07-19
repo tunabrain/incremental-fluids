@@ -652,7 +652,6 @@ class FluidSolver {
         
         for (int y = 0; y < _h; y++) {
             for (int x = 0; x < _w; x++) {
-                //double density = _densityAir*(1.0 + alpha*_d->at(x, y) - (_t->at(x, y) - _tAmb)/_tAmb);
                 double density = _densityAir*_tAmb/_t->at(x, y)*(1.0 + alpha*_d->at(x, y));
                 density = max(density, 0.05*_densityAir); /* Clamp dangerously low densities */
                 

@@ -86,7 +86,7 @@ double trapezoidOccupancy(double out1, double out2, double in1, double in2) {
  * c) Two adjacent corners are inside
  *   => Compute using trapezoid area
  * d) Two opposing corners are inside
- *   => Compute as sum of area of two independent triangles
+ *   => Compute as sum of area of two opposed triangles
  *
  * The two remaining cases, all corners outside/inside, can be computed trivially
  */
