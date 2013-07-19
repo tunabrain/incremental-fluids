@@ -1,7 +1,7 @@
 6) Heat
 ========================================
 
-So far, the only source of velocity in our simulation was due to inflows injecting fluid at a certain initial velocity. One way to make this more interesting is to include heat into the mix. Since hot air rises and cold air sinks, this will allow us to also introduce fluid motion due changes in temperature.
+So far, the only source of velocity in our simulation was due to inflows injecting fluid at a certain initial velocity. One way to make this more interesting is to include heat into the mix. Since hot air rises and cold air sinks, this will allow us to also introduce fluid motion due to changes in temperature.
 
 To achieve this, we first have to introduce temperature as a fluid quantity. It is initialized and advected like all the other quantities and is centered within the fluid cells, just like the fluid concentration. However, unlike any of the other quantities, one additional step we have take into account is heat diffusion. Heat does not stay in place; hot areas exchange energy with cold areas, seeking to bring temperature to an equilibrium.
 

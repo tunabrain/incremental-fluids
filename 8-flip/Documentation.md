@@ -17,7 +17,7 @@ To transfer the change in fluid quantities back to the particles, we keep a copy
 
 Finally, advection can be performed using the existing third order Runge-Kutta implementation - only this time forward in time instead of backwards. Similar to before, if the newly computed position ends up inside a solid, we move it out of the solid to the nearest point in the fluid.
 
-There is unfortunately one big problem one encounters when implementing this method. Namely, as the particles are moved around in the flow, they are typically no longer uniformly distributed. In some areas, particles are pushed together, resulting in overcrowded cells, whereas in other areas gaps may open up, leaving some cells with no particles near them, which results in them having undefined values after the particle-to-grid transfer.
+There is unfortunately one big problem one encounters when implementing this method. Namely, as the particles are moved around in the flow, they are typically no longer uniformly distributed. In some areas, particles are pushed together, resulting in overcrowded cells, whereas in other areas gaps may open up, leaving some cells with no particles near them. This can result in cells with undefined values after the particle-to-grid transfer.
 
 Battling the first problem is as easy as deleting particles from a cell if it contains more than a certain number of particles (12 in this implementation). The latter problem is unfortunately not as easy to deal with, as in addition to spawning new particles in empty cells, we also have to somehow to replace undefined values with quantities that make sense.
 
