@@ -308,6 +308,15 @@ public:
         memset(_p, 0, _w*_h*sizeof(double));
     }
     
+    ~FluidSolver() {
+        delete _d;
+        delete _u;
+        delete _v;
+        
+        delete[] _r;
+        delete[] _p;
+    }
+    
     void update(double timestep) {
         buildRhs();
         project(600, timestep);

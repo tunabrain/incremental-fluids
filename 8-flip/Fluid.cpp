@@ -326,6 +326,15 @@ public:
     ~FluidQuantity() {
         delete[] _src;
         delete[] _old;
+        
+        delete[] _phi;
+        delete[] _volume;
+        delete[] _normalX;
+        delete[] _normalY;
+        
+        delete[] _cell;
+        delete[] _body;
+        delete[] _mask;
     }
     
     double *src() {
@@ -866,6 +875,17 @@ public:
         initParticles();
     }
     
+    ~ParticleQuantities() {
+        delete[] _posX;
+        delete[] _posY;
+        
+        delete[] _weight;
+        delete[] _counts;
+        
+        for (size_t i = 0; i < _quantities.size(); ++i)
+            delete[] _quantities[i];
+    }
+    
     /* Adds a new quantity to be carried by the particles */
     void addQuantity(FluidQuantity *q) {
         double *property = new double[_maxParticles];
@@ -1302,6 +1322,27 @@ public:
                 
         _uDensity = new double[(_w + 1)*_h];
         _vDensity = new double[_w*(_h + 1)];
+    }
+    
+    ~FluidSolver() {
+        delete _d;
+        delete _t;
+        delete _u;
+        delete _v;
+        
+        delete _qs;
+        
+        delete[] _r;
+        delete[] _p;
+        delete[] _z;
+        delete[] _s;
+        delete[] _aDiag;
+        delete[] _aPlusX;
+        delete[] _aPlusY;
+        delete[] _precon;
+        
+        delete[] _uDensity;
+        delete[] _vDensity;
     }
     
     void update(double timestep) {

@@ -377,6 +377,15 @@ public:
     ~FluidQuantity() {
         delete[] _src;
         delete[] _dst;
+        
+        delete[] _phi;
+        delete[] _volume;
+        delete[] _normalX;
+        delete[] _normalY;
+        
+        delete[] _cell;
+        delete[] _body;
+        delete[] _mask;
     }
     
     void flip() {
@@ -896,6 +905,21 @@ public:
         _aPlusX = new double[_w*_h];
         _aPlusY = new double[_w*_h];
         _precon = new double[_w*_h];
+    }
+    
+    ~FluidSolver() {
+        delete _d;
+        delete _u;
+        delete _v;
+        
+        delete[] _r;
+        delete[] _p;
+        delete[] _z;
+        delete[] _s;
+        delete[] _aDiag;
+        delete[] _aPlusX;
+        delete[] _aPlusY;
+        delete[] _precon;
     }
     
     void update(double timestep) {
