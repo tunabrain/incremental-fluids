@@ -767,7 +767,7 @@ class ParticleQuantities {
             int iy = (int)_posY[i];
             int idx = ix + iy*_w;
             
-            if (ix < 0 && iy < 0 && ix >= _w && iy >= _h)
+            if (ix < 0 || iy < 0 || ix >= _w || iy >= _h)
                 continue;
             
             if (_counts[idx] > _MaxPerCell) {
