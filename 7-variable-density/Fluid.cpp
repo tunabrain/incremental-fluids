@@ -21,6 +21,8 @@ freely, subject to the following restrictions:
    distribution.
 */
 
+#define _USE_MATH_DEFINES
+
 #include <algorithm>
 #include <stdint.h>
 #include <stdio.h>
