@@ -877,9 +877,9 @@ class FluidSolver {
                     const SolidBody &b = *_bodies[body[idx]];
                     
                     _u->at(x, y) = b.velocityX(x*_hx, (y + 0.5)*_hx);
-                    _v->at(x, y) = b.velocityX((x + 0.5)*_hx, y*_hx);
+                    _v->at(x, y) = b.velocityY((x + 0.5)*_hx, y*_hx);
                     _u->at(x + 1, y) = b.velocityX((x + 1.0)*_hx, (y + 0.5)*_hx);
-                    _v->at(x, y + 1) = b.velocityX((x + 0.5)*_hx, (y + 1.0)*_hx);
+                    _v->at(x, y + 1) = b.velocityY((x + 0.5)*_hx, (y + 1.0)*_hx);
                 }
             }
         }
